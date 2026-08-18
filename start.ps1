@@ -324,8 +324,10 @@ function Invoke-BuildAll {
 # Espera
 # --------------------------------------------------------------------------------------
 
+# O parâmetro -Process é a app sendo esperada. Se ela morreu (jar corrompido, porta em uso,
+# exception no startup), não faz sentido esperar o timeout inteiro — aborta na hora.
 function Wait-ForHttp {
-    param([string]$Url, [string]$Label, [int]$TimeoutSeconds)
+    param([string]$Url, [string]$Label, [int]$TimeoutSeconds, [System.Diagnostics.Process]$Process)
 
     $waited = 0
     Write-Host "  aguardando $Label" -NoNewline
@@ -336,17 +338,21 @@ function Wait-ForHttp {
             return $true
         }
         catch {
+            if ($null -ne $Process -and $Process.HasExited) {
+                Write-Host ' processo morreu'
+                return $false
+            }
             Start-Sleep -Seconds 2
             $waited += 2
             Write-Host '.' -NoNewline
         }
     }
-    Write-Host ' falhou'
+    Write-Host ' timeout'
     return $false
 }
 
 function Wait-ForPort {
-    param([int]$Port, [string]$Label, [int]$TimeoutSeconds)
+    param([int]$Port, [string]$Label, [int]$TimeoutSeconds, [System.Diagnostics.Process]$Process)
 
     $waited = 0
     Write-Host "  aguardando $Label" -NoNewline
@@ -355,11 +361,15 @@ function Wait-ForPort {
             Write-Host " ok ($waited`s)"
             return $true
         }
+        if ($null -ne $Process -and $Process.HasExited) {
+            Write-Host ' processo morreu'
+            return $false
+        }
         Start-Sleep -Seconds 2
         $waited += 2
         Write-Host '.' -NoNewline
     }
-    Write-Host ' falhou'
+    Write-Host ' timeout'
     return $false
 }
 
@@ -414,8 +424,8 @@ function Start-Api {
         -WorkingDirectory (Join-Path $RootDir 'logistic-api') `
         -LogFile (Join-Path $LogDir 'logistic-api.log')
 
-    if (-not (Wait-ForHttp -Url "http://localhost:$ApiPort/actuator/health" -Label 'logistic-api' -TimeoutSeconds 90)) {
-        Fail 'logistic-api não subiu em 90s. Veja: logs\logistic-api.log'
+    if (-not (Wait-ForHttp -Url "http://localhost:$ApiPort/actuator/health" -Label 'logistic-api' -TimeoutSeconds 90 -Process $script:ApiProcess)) {
+        Fail 'logistic-api não subiu. Veja: logs\logistic-api.log'
     }
 }
 
@@ -426,8 +436,8 @@ function Start-Agent {
         -WorkingDirectory (Join-Path $RootDir 'logistic-agent') `
         -LogFile (Join-Path $LogDir 'logistic-agent.log')
 
-    if (-not (Wait-ForHttp -Url "http://localhost:$AgentPort/api/chat/health" -Label 'logistic-agent' -TimeoutSeconds 90)) {
-        Fail 'logistic-agent não subiu em 90s. Veja: logs\logistic-agent.log'
+    if (-not (Wait-ForHttp -Url "http://localhost:$AgentPort/api/chat/health" -Label 'logistic-agent' -TimeoutSeconds 90 -Process $script:AgentProcess)) {
+        Fail 'logistic-agent não subiu. Veja: logs\logistic-agent.log'
     }
 }
 
@@ -437,8 +447,8 @@ function Start-Webui {
         -WorkingDirectory (Join-Path $RootDir 'logistic-webui') `
         -LogFile (Join-Path $LogDir 'logistic-webui.log')
 
-    if (-not (Wait-ForPort -Port $WebuiPort -Label 'logistic-webui' -TimeoutSeconds 60)) {
-        Fail 'logistic-webui não subiu em 60s. Veja: logs\logistic-webui.log'
+    if (-not (Wait-ForPort -Port $WebuiPort -Label 'logistic-webui' -TimeoutSeconds 60 -Process $script:WebuiProcess)) {
+        Fail 'logistic-webui não subiu. Veja: logs\logistic-webui.log'
     }
 }
 

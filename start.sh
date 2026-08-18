@@ -272,8 +272,10 @@ build_all() {
 # Espera
 # --------------------------------------------------------------------------------------
 
+# O 4º argumento é o PID da app. Se ela morreu (jar corrompido, porta em uso, exception
+# no startup), não faz sentido esperar o timeout inteiro — aborta na hora.
 wait_for_http() {
-    local url="$1" label="$2" timeout="$3"
+    local url="$1" label="$2" timeout="$3" pid="${4:-}"
     local waited=0
 
     echo -n "  aguardando $label"
@@ -282,17 +284,21 @@ wait_for_http() {
             echo " ok (${waited}s)"
             return 0
         fi
+        if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+            echo " processo morreu"
+            return 1
+        fi
         sleep 2
         waited=$((waited + 2))
         echo -n "."
     done
 
-    echo " falhou"
+    echo " timeout"
     return 1
 }
 
 wait_for_port() {
-    local port="$1" label="$2" timeout="$3"
+    local port="$1" label="$2" timeout="$3" pid="${4:-}"
     local waited=0
 
     echo -n "  aguardando $label"
@@ -301,12 +307,16 @@ wait_for_port() {
             echo " ok (${waited}s)"
             return 0
         fi
+        if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+            echo " processo morreu"
+            return 1
+        fi
         sleep 2
         waited=$((waited + 2))
         echo -n "."
     done
 
-    echo " falhou"
+    echo " timeout"
     return 1
 }
 
@@ -354,16 +364,16 @@ start_java_app() {
 start_api() {
     start_java_app logistic-api "$LOG_DIR/logistic-api.log"
     API_PID=$!
-    if ! wait_for_http "http://localhost:$API_PORT/actuator/health" "logistic-api" 90; then
-        fail "logistic-api não subiu em 90s. Veja: tail -n 50 $LOG_DIR/logistic-api.log"
+    if ! wait_for_http "http://localhost:$API_PORT/actuator/health" "logistic-api" 90 "$API_PID"; then
+        fail "logistic-api não subiu. Veja: tail -n 50 $LOG_DIR/logistic-api.log"
     fi
 }
 
 start_agent() {
     start_java_app logistic-agent "$LOG_DIR/logistic-agent.log"
     AGENT_PID=$!
-    if ! wait_for_http "http://localhost:$AGENT_PORT/api/chat/health" "logistic-agent" 90; then
-        fail "logistic-agent não subiu em 90s. Veja: tail -n 50 $LOG_DIR/logistic-agent.log"
+    if ! wait_for_http "http://localhost:$AGENT_PORT/api/chat/health" "logistic-agent" 90 "$AGENT_PID"; then
+        fail "logistic-agent não subiu. Veja: tail -n 50 $LOG_DIR/logistic-agent.log"
     fi
 }
 
@@ -371,8 +381,8 @@ start_webui() {
     step "Subindo logistic-webui"
     ( cd "$ROOT_DIR/logistic-webui" && exec npm run dev ) > "$LOG_DIR/logistic-webui.log" 2>&1 &
     WEBUI_PID=$!
-    if ! wait_for_port "$WEBUI_PORT" "logistic-webui" 60; then
-        fail "logistic-webui não subiu em 60s. Veja: tail -n 50 $LOG_DIR/logistic-webui.log"
+    if ! wait_for_port "$WEBUI_PORT" "logistic-webui" 60 "$WEBUI_PID"; then
+        fail "logistic-webui não subiu. Veja: tail -n 50 $LOG_DIR/logistic-webui.log"
     fi
 }
 
