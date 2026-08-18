@@ -66,9 +66,10 @@ print_help() {
     cat <<'EOF'
 Uso: ./start.sh [opções]
 
-  (nenhuma)     compila o que mudou, sobe tudo, semeia se o banco estiver vazio
-  --build       força recompilar api e agent, e npm install no webui
-  --no-build    pula a checagem de build
+  (nenhuma)     sobe tudo sem compilar, semeia se o banco estiver vazio
+  --build       recompila api e agent, e roda npm install no webui
+  --no-build    nunca compila: falha se faltar jar ou node_modules (o padrão compila
+                nesse caso, por ser a primeira execução)
   --reset       limpa o banco e reinsere o dados.sql, mesmo populado (pede confirmação)
   --no-seed     nunca semeia, nem com banco vazio
   --yes         pula a confirmação do --reset
@@ -210,18 +211,6 @@ jar_path() {
     find "$ROOT_DIR/$project/target" -maxdepth 1 -name '*.jar' ! -name '*-sources.jar' 2>/dev/null | head -n 1
 }
 
-# Recompila se o jar não existe, ou se algum arquivo de src/ ou o pom.xml for mais novo que ele.
-needs_build() {
-    local project="$1"
-    local jar
-    jar="$(jar_path "$project")"
-
-    [ -n "$jar" ] || return 0
-    [ "$ROOT_DIR/$project/pom.xml" -nt "$jar" ] && return 0
-    [ -n "$(find "$ROOT_DIR/$project/src" -newer "$jar" -type f -print -quit 2>/dev/null)" ] && return 0
-    return 1
-}
-
 build_maven_project() {
     local project="$1"
     step "Compilando $project"
@@ -237,35 +226,41 @@ build_webui() {
     info "dependências instaladas"
 }
 
-webui_needs_install() {
-    [ -d "$ROOT_DIR/logistic-webui/node_modules" ] || return 0
-    [ "$ROOT_DIR/logistic-webui/package.json" -nt "$ROOT_DIR/logistic-webui/node_modules" ] && return 0
-    return 1
-}
-
+# Compilar é a exceção, não a regra: o padrão é subir o que já está construído. O único
+# caso em que o script compila sozinho é quando não há artefato nenhum — sem jar ou sem
+# node_modules não tem o que subir.
 build_all() {
-    if [ "$SKIP_BUILD" = true ]; then
-        step "Build pulado (--no-build)"
-        for project in logistic-api logistic-agent; do
-            [ -n "$(jar_path "$project")" ] || fail "--no-build informado, mas $project/target não tem jar. Rode sem a flag pelo menos uma vez."
-        done
-        [ -d "$ROOT_DIR/logistic-webui/node_modules" ] || fail "--no-build informado, mas logistic-webui/node_modules não existe."
+    if [ "$FORCE_BUILD" = true ]; then
+        step "Recompilando tudo (--build)"
+        build_maven_project logistic-api
+        build_maven_project logistic-agent
+        build_webui
         return
     fi
 
+    step "Verificando artefatos"
+
     for project in logistic-api logistic-agent; do
-        if [ "$FORCE_BUILD" = true ] || needs_build "$project"; then
-            build_maven_project "$project"
+        if [ -n "$(jar_path "$project")" ]; then
+            info "$project — jar encontrado"
+        elif [ "$SKIP_BUILD" = true ]; then
+            fail "--no-build informado, mas $project/target não tem jar. Rode com --build."
         else
-            info "$project já compilado — sem mudanças"
+            info "$project sem jar — compilando (primeira execução)"
+            build_maven_project "$project"
         fi
     done
 
-    if [ "$FORCE_BUILD" = true ] || webui_needs_install; then
-        build_webui
+    if [ -d "$ROOT_DIR/logistic-webui/node_modules" ]; then
+        info "logistic-webui — node_modules encontrado"
+    elif [ "$SKIP_BUILD" = true ]; then
+        fail "--no-build informado, mas logistic-webui/node_modules não existe. Rode com --build."
     else
-        info "logistic-webui já instalado — sem mudanças"
+        info "logistic-webui sem node_modules — instalando (primeira execução)"
+        build_webui
     fi
+
+    info "mudou o código? rode com --build"
 }
 
 # --------------------------------------------------------------------------------------

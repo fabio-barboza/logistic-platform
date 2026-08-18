@@ -72,9 +72,10 @@ function Show-Help {
     @'
 Uso: .\start.ps1 [opções]
 
-  (nenhuma)     compila o que mudou, sobe tudo, semeia se o banco estiver vazio
-  -Build        força recompilar api e agent, e npm install no webui
-  -NoBuild      pula a checagem de build
+  (nenhuma)     sobe tudo sem compilar, semeia se o banco estiver vazio
+  -Build        recompila api e agent, e roda npm install no webui
+  -NoBuild      nunca compila: falha se faltar jar ou node_modules (o padrão compila
+                nesse caso, por ser a primeira execução)
   -Reset        limpa o banco e reinsere o dados.sql, mesmo populado (pede confirmação)
   -NoSeed       nunca semeia, nem com banco vazio
   -Yes          pula a confirmação do -Reset
@@ -227,27 +228,6 @@ function Get-JarPath {
     return $jar.FullName
 }
 
-# Recompila se o jar não existe, ou se algum arquivo de src\ ou o pom.xml for mais novo que ele.
-function Test-NeedsBuild {
-    param([string]$Project)
-
-    $jarPath = Get-JarPath -Project $Project
-    if ($null -eq $jarPath) {
-        return $true
-    }
-
-    $jarTime = (Get-Item $jarPath).LastWriteTime
-    $pomTime = (Get-Item (Join-Path $RootDir "$Project\pom.xml")).LastWriteTime
-    if ($pomTime -gt $jarTime) {
-        return $true
-    }
-
-    $newer = Get-ChildItem -Path (Join-Path $RootDir "$Project\src") -Recurse -File |
-        Where-Object { $_.LastWriteTime -gt $jarTime } |
-        Select-Object -First 1
-    return $null -ne $newer
-}
-
 function Invoke-MavenBuild {
     param([string]$Project)
 
@@ -265,15 +245,6 @@ function Invoke-MavenBuild {
     Write-Info "$Project compilado"
 }
 
-function Test-WebuiNeedsInstall {
-    $modules = Join-Path $RootDir 'logistic-webui\node_modules'
-    if (-not (Test-Path $modules)) {
-        return $true
-    }
-    $packageJson = Join-Path $RootDir 'logistic-webui\package.json'
-    return (Get-Item $packageJson).LastWriteTime -gt (Get-Item $modules).LastWriteTime
-}
-
 function Invoke-WebuiInstall {
     Write-Step 'Instalando dependências do logistic-webui'
     Push-Location (Join-Path $RootDir 'logistic-webui')
@@ -289,35 +260,45 @@ function Invoke-WebuiInstall {
     Write-Info 'dependências instaladas'
 }
 
+# Compilar é a exceção, não a regra: o padrão é subir o que já está construído. O único
+# caso em que o script compila sozinho é quando não há artefato nenhum — sem jar ou sem
+# node_modules não tem o que subir.
 function Invoke-BuildAll {
-    if ($NoBuild) {
-        Write-Step 'Build pulado (-NoBuild)'
-        foreach ($project in @('logistic-api', 'logistic-agent')) {
-            if ($null -eq (Get-JarPath -Project $project)) {
-                Fail "-NoBuild informado, mas $project\target não tem jar. Rode sem a flag pelo menos uma vez."
-            }
-        }
-        if (-not (Test-Path (Join-Path $RootDir 'logistic-webui\node_modules'))) {
-            Fail '-NoBuild informado, mas logistic-webui\node_modules não existe.'
-        }
+    if ($Build) {
+        Write-Step 'Recompilando tudo (-Build)'
+        Invoke-MavenBuild -Project 'logistic-api'
+        Invoke-MavenBuild -Project 'logistic-agent'
+        Invoke-WebuiInstall
         return
     }
 
+    Write-Step 'Verificando artefatos'
+
     foreach ($project in @('logistic-api', 'logistic-agent')) {
-        if ($Build -or (Test-NeedsBuild -Project $project)) {
-            Invoke-MavenBuild -Project $project
+        if ($null -ne (Get-JarPath -Project $project)) {
+            Write-Info "$project — jar encontrado"
+        }
+        elseif ($NoBuild) {
+            Fail "-NoBuild informado, mas $project\target não tem jar. Rode com -Build."
         }
         else {
-            Write-Info "$project já compilado — sem mudanças"
+            Write-Info "$project sem jar — compilando (primeira execução)"
+            Invoke-MavenBuild -Project $project
         }
     }
 
-    if ($Build -or (Test-WebuiNeedsInstall)) {
-        Invoke-WebuiInstall
+    if (Test-Path (Join-Path $RootDir 'logistic-webui\node_modules')) {
+        Write-Info 'logistic-webui — node_modules encontrado'
+    }
+    elseif ($NoBuild) {
+        Fail '-NoBuild informado, mas logistic-webui\node_modules não existe. Rode com -Build.'
     }
     else {
-        Write-Info 'logistic-webui já instalado — sem mudanças'
+        Write-Info 'logistic-webui sem node_modules — instalando (primeira execução)'
+        Invoke-WebuiInstall
     }
+
+    Write-Info 'mudou o código? rode com -Build'
 }
 
 # --------------------------------------------------------------------------------------

@@ -63,7 +63,7 @@ Um comando sobe tudo; `Ctrl+C` derruba tudo. Ao final o script imprime:
 | <http://localhost:8081> | logistic-api |
 | <http://localhost:8081/swagger-ui.html> | Swagger da API |
 
-O que o script faz, em ordem: checa pré-requisitos e portas, compila o que mudou, sobe o
+O que o script faz, em ordem: checa pré-requisitos e portas, confere que os artefatos existem, sobe o
 Postgres e espera o `pg_isready`, sobe a API e espera o `/actuator/health`, semeia o banco se
 estiver vazio, sobe o agent e espera o `/api/chat/health`, sobe o webui. A espera entre
 etapas não é opcional — sem ela o agent sobe antes das tools MCP existirem e falha o handshake.
@@ -72,9 +72,9 @@ etapas não é opcional — sem ela o agent sobe antes das tools MCP existirem e
 
 | Bash | PowerShell | Efeito |
 |------|-----------|--------|
-| *(nenhuma)* | *(nenhuma)* | compila o que mudou, sobe tudo, semeia **se o banco estiver vazio** |
-| `--build` | `-Build` | força recompilar api e agent, e `npm install` no webui |
-| `--no-build` | `-NoBuild` | pula a checagem de build |
+| *(nenhuma)* | *(nenhuma)* | sobe tudo **sem compilar**, semeia **se o banco estiver vazio** |
+| `--build` | `-Build` | recompila api e agent, e roda `npm install` no webui |
+| `--no-build` | `-NoBuild` | nunca compila: falha se faltar jar ou `node_modules` |
 | `--reset` | `-Reset` | limpa o banco e reinsere o `dados.sql`, mesmo populado. Pede confirmação (`s/N`) |
 | `--no-seed` | `-NoSeed` | nunca semeia, nem com banco vazio |
 | `--yes` | `-Yes` | pula a confirmação do `--reset` |
@@ -82,6 +82,9 @@ etapas não é opcional — sem ela o agent sobe antes das tools MCP existirem e
 
 Comportamentos que não são óbvios:
 
+- **O padrão não compila.** Mudou código Java ou JS? Rode com `--build`, senão a stack sobe com
+  o artefato antigo. A única exceção é a primeira execução: sem jar ou sem `node_modules` não há
+  o que subir, então o script compila sozinho. `--no-build` tira até essa exceção e falha.
 - **O seed roda sozinho só na primeira vez.** O script conta os motoristas; `0` significa banco
   vazio e ele aplica o `dados.sql`. Da segunda execução em diante, imprime
   `Banco já populado (N motoristas) — seed ignorado.` O `TRUNCATE` no topo do `dados.sql` é
