@@ -13,6 +13,11 @@ exponha API compatível com OpenAI — local ou na nuvem — e o modelo tem **ze
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Fabio%20Oliveira-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/fabio-oliveira-20a977a1/)
 [![GitHub](https://img.shields.io/badge/GitHub-fabio--barboza-181717?logo=github&logoColor=white)](https://github.com/fabio-barboza)
 
+![O chat respondendo com gráfico e tabela](docs/demo-chat.png)
+
+<p align="center"><sub>Duas perguntas em português; o modelo escolhe as tools, busca os dados via MCP
+e decide renderizar gráfico ou tabela.</sub></p>
+
 ## O que este projeto demonstra
 
 Um caso de uso completo de **IA aplicada a um domínio de negócio real**, construído com o stack
