@@ -38,7 +38,7 @@ const app = document.getElementById('app')
 app.innerHTML = `
 <div class="app">
     <div class="header">
-        <span>Logistic AI</span>
+        <span>Logistic Platform</span>
         <button id="new-chat" title="Nova conversa">+ Nova conversa</button>
     </div>
     <div class="chat" id="chat"></div>
