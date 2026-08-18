@@ -1,0 +1,35 @@
+server:
+  port: 8080
+spring:
+  application:
+    name: logistic-agent
+  ai:
+    openai:
+      base-url: http://localhost:8200
+      api-key: not-needed
+      chat:
+        options:
+          model: qwen3.6:35B
+          temperature: 0.7
+          max-tokens: 16000
+    mcp:
+      client:
+        type: SYNC
+        request-timeout: 60s
+        toolcallback:
+          enabled: true
+        streamable-http:
+          connections:
+            logistic:
+              url: http://localhost:8081
+              endpoint: /mcp
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+logging:
+  level:
+    br.com.fabio.logisticagent: INFO

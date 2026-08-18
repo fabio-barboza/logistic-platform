@@ -1,0 +1,20 @@
+# Build Java
+target/
+
+# Frontend
+node_modules/
+dist/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Dados do Postgres (volume do docker compose, montado em logistic-api/infra/postgres)
+**/infra/postgres/
+
+# Logs dos scripts de subida
+logs/
+
+# Variáveis de ambiente locais
+.env
