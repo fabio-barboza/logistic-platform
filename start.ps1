@@ -150,10 +150,27 @@ function Test-Node {
     Write-Info "Node $(& node -v)"
 }
 
+function Test-DbContainerRunning {
+    $state = docker inspect -f '{{.State.Running}}' $DbContainer 2>$null
+    return ($LASTEXITCODE -eq 0) -and (($state | Out-String).Trim() -eq 'true')
+}
+
 function Test-Ports {
     $busy = @()
+
+    # A 5432 tem tratamento próprio: se quem está ouvindo é o nosso container, o compose
+    # apenas o reaproveita — não é conflito.
+    if (Test-PortBusy -Port $DbPort) {
+        if (Test-DbContainerRunning) {
+            Write-Info "container $DbContainer já está de pé — será reaproveitado"
+        }
+        else {
+            Write-Host "  porta $DbPort (Postgres) ocupada por outro processo"
+            $busy += $DbPort
+        }
+    }
+
     $ports = [ordered]@{
-        $DbPort    = 'Postgres'
         $ApiPort   = 'logistic-api'
         $AgentPort = 'logistic-agent'
         $WebuiPort = 'logistic-webui'
@@ -169,7 +186,7 @@ function Test-Ports {
     if ($busy.Count -gt 0) {
         Fail "libere as portas acima antes de subir. Um container de outra sessão pode estar segurando a 5432: 'docker rm -f $DbContainer'."
     }
-    Write-Info 'portas 5432, 8080, 8081 e 5173 livres'
+    Write-Info 'portas 8080, 8081 e 5173 livres'
 }
 
 function Test-Llm {

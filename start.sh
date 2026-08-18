@@ -150,9 +150,25 @@ check_node() {
     info "Node $(node -v)"
 }
 
+db_container_is_running() {
+    [ "$(docker inspect -f '{{.State.Running}}' "$DB_CONTAINER" 2>/dev/null)" = "true" ]
+}
+
 check_ports() {
     local port label busy=false
-    for entry in "$DB_PORT:Postgres" "$API_PORT:logistic-api" "$AGENT_PORT:logistic-agent" "$WEBUI_PORT:logistic-webui"; do
+
+    # A 5432 tem tratamento próprio: se quem está ouvindo é o nosso container, o compose
+    # apenas o reaproveita — não é conflito.
+    if port_is_busy "$DB_PORT"; then
+        if db_container_is_running; then
+            info "container $DB_CONTAINER já está de pé — será reaproveitado"
+        else
+            echo "  porta $DB_PORT (Postgres) ocupada por outro processo" >&2
+            busy=true
+        fi
+    fi
+
+    for entry in "$API_PORT:logistic-api" "$AGENT_PORT:logistic-agent" "$WEBUI_PORT:logistic-webui"; do
         port="${entry%%:*}"
         label="${entry##*:}"
         if port_is_busy "$port"; then
@@ -164,7 +180,7 @@ check_ports() {
     if [ "$busy" = true ]; then
         fail "libere as portas acima antes de subir. Um container de outra sessão pode estar segurando a 5432: 'docker rm -f $DB_CONTAINER'."
     fi
-    info "portas 5432, 8080, 8081 e 5173 livres"
+    info "portas 8080, 8081 e 5173 livres"
 }
 
 check_llm() {
