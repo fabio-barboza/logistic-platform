@@ -1,0 +1,62 @@
+[
+  {
+    "id": "count-drivers",
+    "question": "quantos motoristas existem?",
+    "expectAnyOf": ["executeQuery"],
+    "render": "none"
+  },
+  {
+    "id": "count-orders-by-status",
+    "question": "quantos pedidos existem por status?",
+    "expectAnyOf": ["countOrdersBy"],
+    "forbid": ["executeQuery", "searchOrders"]
+  },
+  {
+    "id": "count-routes-by-status",
+    "question": "quantas rotas existem por status?",
+    "expectAnyOf": ["countRoutesBy"],
+    "forbid": ["executeQuery", "searchRoutes"]
+  },
+  {
+    "id": "typed-search-orders",
+    "question": "liste os pedidos entregues em SP",
+    "expectAnyOf": ["searchOrders"],
+    "forbid": ["executeQuery"]
+  },
+  {
+    "id": "typed-search-routes",
+    "question": "quais rotas estão em andamento?",
+    "expectAnyOf": ["searchRoutes"],
+    "forbid": ["executeQuery"]
+  },
+  {
+    "id": "chart-orders-by-status",
+    "question": "faça um gráfico de pedidos por status",
+    "expectAnyOf": ["countOrdersBy"],
+    "render": "chart"
+  },
+  {
+    "id": "table-vehicles",
+    "question": "mostre em uma tabela os veículos com capacidade acima de 100",
+    "expectAnyOf": ["searchVehicles"],
+    "forbid": ["executeQuery"],
+    "render": "table"
+  },
+  {
+    "id": "sql-for-join",
+    "question": "quais motoristas de SP tiveram mais falhas de entrega em rotas concluídas?",
+    "expectAnyOf": ["executeQuery"]
+  },
+  {
+    "id": "schema-question",
+    "question": "quais campos existem na entidade pedido?",
+    "expectAnyOf": ["describeSchema"]
+  },
+  {
+    "id": "memory-followup",
+    "setup": "liste os pedidos entregues em SP",
+    "question": "e em MG?",
+    "expectAnyOf": ["searchOrders"],
+    "forbid": ["executeQuery"]
+  }
+]
