@@ -12,7 +12,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import javax.sql.DataSource;
 
 /**
- * Segundo DataSource, usado exclusivamente pela tool MCP execute_query. Conecta com a role
+ * Segundo DataSource, usado exclusivamente pela tool MCP executeQuery. Conecta com a role
  * read-only do Postgres (logistic_ro) e aplica statement_timeout via connection-init-sql. O
  * DataSource principal continua exclusivo do JPA e do Flyway.
  *

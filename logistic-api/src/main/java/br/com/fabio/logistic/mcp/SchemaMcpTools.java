@@ -12,7 +12,7 @@ public class SchemaMcpTools {
 
     @McpTool(description = """
             Descreve as tabelas, campos, enums e a tradução de status PT-BR do banco de logística.
-            Use antes de montar uma query para execute_query, para saber os nomes exatos das tabelas
+            Use antes de montar uma query para executeQuery, para saber os nomes exatos das tabelas
             e colunas.
             """)
     public String describeSchema() {

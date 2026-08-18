@@ -22,7 +22,7 @@ public class QueryMcpTools {
             leitura — INSERT/UPDATE/DELETE/CREATE são recusados pelo próprio banco.
 
             Tabelas disponíveis: vehicle, driver, driver_vehicle, route, "order" (nome reservado —
-            sempre entre aspas duplas). Use a tool describe_schema para ver colunas e enums antes de
+            sempre entre aspas duplas). Use a tool describeSchema para ver colunas e enums antes de
             montar a query.
 
             Regras: só um comando SELECT (ou WITH ... SELECT) por chamada; não use ';'; se não

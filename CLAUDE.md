@@ -54,8 +54,8 @@ Camadas: `controller/` (REST) e `mcp/` (tools) são **dois adaptadores sobre o m
 
 - `repository/`: filtro dinâmico via JPQL com `(:param IS NULL OR ...)`. Parâmetros string/uuid/timestamp exigem `CAST(:param AS tipo)` — o Postgres não infere o tipo sozinho. Por isso também o `prepareThreshold=0` na URL do datasource (`application.yml`); tirar isso quebra as queries de busca.
 - `McpPageSupport`: limite default 100, teto 500 nas tools de busca — payload maior estoura a janela de contexto do modelo.
-- `SchemaMcpTools.describe_schema`: descreve o schema para o modelo em vez de inchar o system prompt do agent. **Mantenha em sincronia com `V1__init.sql`** ao mudar tabelas/enums.
-- `QueryService` / `execute_query`: única exceção ao acesso via JPA (a query é escrita pela LLM em runtime). A blindagem contra escrita é o GRANT no Postgres (role `logistic_ro`, `V2__readonly_role.sql`), não as checagens em Java — essas (`;`, `SELECT`, `LIMIT` implícito de 500) existem só para o modelo se corrigir rápido. Não troque a role por validação em regex.
+- `SchemaMcpTools.describeSchema`: descreve o schema para o modelo em vez de inchar o system prompt do agent. **Mantenha em sincronia com `V1__init.sql`** ao mudar tabelas/enums.
+- `QueryService` / `executeQuery`: única exceção ao acesso via JPA (a query é escrita pela LLM em runtime). A blindagem contra escrita é o GRANT no Postgres (role `logistic_ro`, `V2__readonly_role.sql`), não as checagens em Java — essas (`;`, `SELECT`, `LIMIT` implícito de 500) existem só para o modelo se corrigir rápido. Não troque a role por validação em regex.
 - `ReadOnlyDataSourceConfig`: declarar um `DataSource` manual desliga a auto-config do principal, então os dois estão declarados ali, o do JPA com `@Primary`. Os beans read-only precisam de `@Qualifier` — sem ele, `@Primary` vence e a conexão "read-only" vira a do JPA (role `postgres`, sem `statement_timeout`).
 - Schema por Flyway (`db/migration`), `ddl-auto: validate`. Dados de demo em `db/seed/dados.sql`, aplicados pelo `start.sh` (usa `random()`, então `--reset` gera dataset diferente a cada vez).
 
@@ -78,4 +78,4 @@ Camadas: `controller/` (REST) e `mcp/` (tools) são **dois adaptadores sobre o m
 
 ## Segurança
 
-A stack é local e sem autenticação por desenho: API aberta em 8081, Postgres com `postgres/postgres` e porta publicada, MCP server sem token com `execute_query` livre, senha da role `logistic_ro` fixa e versionada. Não exponha em rede; não trate esses pontos como bugs a "corrigir" sem o usuário pedir.
+A stack é local e sem autenticação por desenho: API aberta em 8081, Postgres com `postgres/postgres` e porta publicada, MCP server sem token com `executeQuery` livre, senha da role `logistic_ro` fixa e versionada. Não exponha em rede; não trate esses pontos como bugs a "corrigir" sem o usuário pedir.
