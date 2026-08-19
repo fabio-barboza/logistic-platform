@@ -19,6 +19,14 @@ auditar não vai para produção.
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Fabio%20Oliveira-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/fabio-oliveira-20a977a1/)
 [![GitHub](https://img.shields.io/badge/GitHub-fabio--barboza-181717?logo=github&logoColor=white)](https://github.com/fabio-barboza)
 
+> **Obs.: isto é uma aplicação de demonstração.** Segurança e guardrails ainda não estão
+> implementados. A `logistic-api` não tem autenticação e o MCP server não tem token, então o
+> modelo chama qualquer tool sem limite — inclusive as de escrita (`createOrder`,
+> `updateOrderStatus`, `createDriver`, `createRoute`…), sem aprovação humana, sem rate limit e
+> sem controle de quem pediu o quê. A única fronteira dura hoje é a role read-only do Postgres,
+> que impede o `executeQuery` de escrever. Rode em `localhost`.
+> Detalhes em [Aviso de segurança](#aviso-de-segurança).
+
 ![O chat respondendo com um gráfico de pizza](docs/demo-chart.png)
 
 ![O chat respondendo com uma tabela](docs/demo-table.png)
