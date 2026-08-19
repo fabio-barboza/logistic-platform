@@ -2,8 +2,10 @@ package br.com.fabio.logisticagent.controller;
 
 import br.com.fabio.logisticagent.dto.ChatMessageDTO;
 import br.com.fabio.logisticagent.service.ChatService;
+import br.com.fabio.logisticagent.config.BackendHealthIndicator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -25,6 +27,9 @@ class ChatControllerTest {
     @MockitoBean
     private ChatService chatService;
 
+    @MockitoBean
+    private BackendHealthIndicator backendHealth;
+
     @Test
     void chatReturnsAssistantMessage() throws Exception {
         when(chatService.respond(anyString(), any()))
@@ -41,9 +46,12 @@ class ChatControllerTest {
 
     @Test
     void healthReturnsRunning() throws Exception {
+        when(backendHealth.health()).thenReturn(Health.up().build());
+
         mockMvc.perform(get("/api/chat/health"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("running"))
-                .andExpect(jsonPath("$.agent").value("logistic-agent"));
+                .andExpect(jsonPath("$.agent").value("logistic-agent"))
+                .andExpect(jsonPath("$.backend").value("online"));
     }
 }

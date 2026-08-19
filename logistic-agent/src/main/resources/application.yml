@@ -61,6 +61,12 @@ springdoc:
   swagger-ui:
     path: /swagger-ui.html
 
+logistic:
+  backend:
+    url: http://localhost:8081
+    check-interval: 15000
+    initial-delay: 5000
+
 logging:
   level:
     br.com.fabio.logisticagent: INFO
