@@ -5,6 +5,7 @@ import br.com.fabio.logisticagent.dto.render.ChartContent;
 import br.com.fabio.logisticagent.dto.render.RenderableContent;
 import br.com.fabio.logisticagent.dto.render.TableContent;
 import br.com.fabio.logisticagent.service.ChatService;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -24,12 +25,14 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Eval de seleção de tools: mede se o modelo escolhe a ferramenta certa para cada pergunta.
+ * Eval de seleção de tools: mede se o modelo escolhe a ferramenta certa, com os argumentos certos,
+ * e se a resposta que sai disso está de acordo com o que o system prompt promete.
  *
  * <p><b>Não roda no build padrão.</b> Depende de infraestrutura externa — a stack de pé e uma LLM
  * respondendo — então está marcado com {@code @Tag("eval")} e é excluído pelo surefire. Para rodar:
@@ -40,9 +43,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * respondendo e o modelo servido na {@code spring.ai.openai.base-url}. Faltando qualquer um, o teste
  * falha com mensagem explícita em vez de passar em silêncio.
  *
+ * <p>Cada caso é avaliado em até sete dimensões (tool esperada, tool proibida, ausência de tool,
+ * argumentos, número de chamadas, render e texto da resposta) e só passa se todas fecharem —
+ * chamar a tool certa com o filtro errado é resposta errada, não acerto parcial.
+ *
  * <p>O assert é sobre a <b>taxa de acerto</b> do dataset, não sobre cada caso: com LLM, um caso
- * isolado falha por ruído e um assert exato deixaria o build vermelho de forma aleatória. Ajuste o
- * piso com {@code -Deval.threshold=0.9}.
+ * isolado falha por ruído e um assert exato deixaria o build vermelho de forma aleatória. O dataset
+ * tem casos difíceis de propósito — 100% não é o esperado, e um piso alto demais é convite a
+ * afrouxar o dataset. Ajuste com {@code -Deval.threshold=0.9}.
  */
 @Tag("eval")
 @ExtendWith(EvalEnvironmentCondition.class)
@@ -54,7 +62,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("Eval — seleção de tools pelo modelo")
 class ToolSelectionEvalTest {
 
-    private static final double DEFAULT_THRESHOLD = 0.8;
+    private static final double DEFAULT_THRESHOLD = 0.75;
 
     @Autowired
     private ChatService chatService;
@@ -106,7 +114,7 @@ class ToolSelectionEvalTest {
             }
 
             ChatMessageDTO response = chatService.respond(evalCase.question(), sessionId);
-            return evaluate(evalCase, recorder.calls(), response.renderData());
+            return evaluate(evalCase, response);
         } catch (Exception e) {
             return new Result(evalCase, recorder.calls(), "none", "erro: " + e.getMessage(), false);
         } finally {
@@ -114,27 +122,87 @@ class ToolSelectionEvalTest {
         }
     }
 
-    private Result evaluate(EvalCase evalCase, List<String> calls, RenderableContent renderData) {
+    private Result evaluate(EvalCase evalCase, ChatMessageDTO response) {
+        List<ToolCall> calls = recorder.calls();
+        List<String> names = recorder.names();
         List<String> failures = new ArrayList<>();
 
         List<String> expected = evalCase.expectAnyOfOrEmpty();
-        if (!expected.isEmpty() && expected.stream().noneMatch(calls::contains)) {
+        if (!expected.isEmpty() && expected.stream().noneMatch(names::contains)) {
             failures.add("esperava uma de " + expected);
         }
 
         evalCase.forbidOrEmpty().stream()
-                .filter(calls::contains)
+                .filter(names::contains)
                 .forEach(forbidden -> failures.add("chamou " + forbidden + ", que era proibido"));
 
+        if (evalCase.expectsNoTool() && !names.isEmpty()) {
+            failures.add("não devia chamar tool nenhuma, chamou " + names);
+        }
+
+        if (evalCase.maxCalls() != null && names.size() > evalCase.maxCalls()) {
+            failures.add("fez " + names.size() + " chamadas, o teto do caso é " + evalCase.maxCalls());
+        }
+
+        // os argumentos só são cobrados das tools que o caso espera; se ele não espera nenhuma
+        // em particular, valem os argumentos de tudo que foi chamado
+        String arguments = recorder.argumentsOf(expected.isEmpty() ? names : expected);
+        evalCase.expectArgsOrEmpty().stream()
+                .filter(fragment -> !arguments.contains(normalizeArgs(fragment)))
+                .forEach(fragment -> failures.add("argumentos sem " + fragment));
+
         String expectedRender = evalCase.render();
-        if (expectedRender != null) {
-            String actualRender = renderTypeOf(renderData);
-            if (!expectedRender.equals(actualRender)) {
-                failures.add("render esperado '" + expectedRender + "', obtido '" + actualRender + "'");
+        String actualRender = renderTypeOf(response.renderData());
+        if (expectedRender != null && !expectedRender.equals(actualRender)) {
+            failures.add("render esperado '" + expectedRender + "', obtido '" + actualRender + "'");
+        }
+
+        if (evalCase.chartType() != null) {
+            String actualChartType = response.renderData() instanceof ChartContent chart ? chart.chartType() : null;
+            if (actualChartType == null || !evalCase.chartType().equalsIgnoreCase(actualChartType)) {
+                failures.add("gráfico esperado do tipo '" + evalCase.chartType() + "', obtido '" + actualChartType + "'");
             }
         }
 
-        return new Result(evalCase, calls, renderTypeOf(renderData), String.join("; ", failures), failures.isEmpty());
+        if (!evalCase.expectColumnsOrEmpty().isEmpty()) {
+            List<String> actualColumns = response.renderData() instanceof TableContent table ? table.columns() : null;
+            if (actualColumns == null || !actualColumns.stream().map(column -> column.toLowerCase(Locale.ROOT)).toList()
+                    .equals(evalCase.expectColumnsOrEmpty().stream().map(column -> column.toLowerCase(Locale.ROOT)).toList())) {
+                failures.add("colunas esperadas " + evalCase.expectColumnsOrEmpty() + ", obtidas " + actualColumns);
+            }
+        }
+
+        // texto avaliado = resposta + payload de render: a tradução de status vale para a tabela
+        // e para o gráfico também, não só para o texto corrido
+        String text = (nullToEmpty(response.content()) + " " + serialize(response.renderData()))
+                .toLowerCase(Locale.ROOT);
+        evalCase.expectTextOrEmpty().stream()
+                .filter(fragment -> !text.contains(fragment.toLowerCase(Locale.ROOT)))
+                .forEach(fragment -> failures.add("resposta sem '" + fragment + "'"));
+        evalCase.forbidTextOrEmpty().stream()
+                .filter(fragment -> text.contains(fragment.toLowerCase(Locale.ROOT)))
+                .forEach(fragment -> failures.add("resposta com '" + fragment + "', que não podia aparecer"));
+
+        return new Result(evalCase, calls, actualRender, String.join("; ", failures), failures.isEmpty());
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    private String serialize(RenderableContent renderData) {
+        if (renderData == null) {
+            return "";
+        }
+        try {
+            return new ObjectMapper().writeValueAsString(renderData);
+        } catch (JsonProcessingException e) {
+            return renderData.toString();
+        }
+    }
+
+    private static String normalizeArgs(String fragment) {
+        return fragment.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
     }
 
     private static String renderTypeOf(RenderableContent renderData) {
@@ -163,11 +231,12 @@ class ToolSelectionEvalTest {
                 .append("\n\n");
         for (Result result : results) {
             out.append(result.passed() ? "  PASS  " : "  FAIL  ")
-                    .append(String.format("%-24s", result.evalCase().id()))
-                    .append("tools=").append(result.calls())
+                    .append(String.format("%-30s", result.evalCase().id()))
+                    .append("tools=").append(result.calls().stream().map(ToolCall::name).toList())
                     .append(" render=").append(result.render());
             if (!result.passed()) {
-                out.append("  <- ").append(result.detail());
+                out.append("\n           <- ").append(result.detail());
+                result.calls().forEach(call -> out.append("\n              ").append(call));
             }
             out.append('\n');
         }
@@ -177,6 +246,6 @@ class ToolSelectionEvalTest {
         return out.toString();
     }
 
-    private record Result(EvalCase evalCase, List<String> calls, String render, String detail, boolean passed) {
+    private record Result(EvalCase evalCase, List<ToolCall> calls, String render, String detail, boolean passed) {
     }
 }

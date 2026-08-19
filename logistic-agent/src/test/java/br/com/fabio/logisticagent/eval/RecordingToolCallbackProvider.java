@@ -10,7 +10,7 @@ import java.util.Arrays;
 
 /**
  * Decora o {@code ToolCallbackProvider} real (as tools descobertas por MCP na logistic-api),
- * registrando o nome de cada tool efetivamente chamada pelo modelo antes de delegar.
+ * registrando o nome e os argumentos de cada tool efetivamente chamada pelo modelo antes de delegar.
  *
  * <p>Existe só nos testes: o código de produção continua recebendo um ToolCallbackProvider
  * qualquer e não sabe que está sendo observado.
@@ -46,13 +46,13 @@ class RecordingToolCallbackProvider implements ToolCallbackProvider {
 
         @Override
         public String call(String toolInput) {
-            recorder.record(getToolDefinition().name());
+            recorder.record(getToolDefinition().name(), toolInput);
             return delegate.call(toolInput);
         }
 
         @Override
         public String call(String toolInput, ToolContext toolContext) {
-            recorder.record(getToolDefinition().name());
+            recorder.record(getToolDefinition().name(), toolInput);
             return delegate.call(toolInput, toolContext);
         }
     }
