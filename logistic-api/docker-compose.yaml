@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg18
+    image: postgres:18
     container_name: logisticdb
     restart: unless-stopped
     ports:

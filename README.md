@@ -2,14 +2,20 @@
 
 **Agente de IA para logística** — um chat que responde perguntas sobre frota, rotas e entregas em
 linguagem natural e devolve a resposta como texto, tabela ou gráfico. Funciona com qualquer LLM que
-exponha API compatível com OpenAI — local ou na nuvem — e o modelo tem **zero acesso ao banco de dados**.
+exponha API compatível com OpenAI — local ou na nuvem.
+
+Duas decisões de arquitetura sustentam o resto: o modelo tem **zero acesso ao banco de dados** — ele
+só chama tools MCP, e a fronteira é garantida por `GRANT` no Postgres, não por validação de string —
+e cada resposta é **rastreável ponta a ponta**: prompt, tool escolhida, argumentos, retorno, tokens e
+latência viram traces OTLP no [Langfuse](#observabilidade-langfuse). Um agente que ninguém consegue
+auditar não vai para produção.
 
 [![Java 21](https://img.shields.io/badge/Java-21-007396?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot 4](https://img.shields.io/badge/Spring%20Boot-4.0-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Spring AI](https://img.shields.io/badge/Spring%20AI-2.0-6DB33F?logo=spring&logoColor=white)](https://spring.io/projects/spring-ai)
 [![MCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-000000)](https://modelcontextprotocol.io/)
 [![PostgreSQL 18](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vite.dev/)
+[![Langfuse](https://img.shields.io/badge/Langfuse-Observabilidade-B5AFEA)](https://langfuse.com/)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Fabio%20Oliveira-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/fabio-oliveira-20a977a1/)
 [![GitHub](https://img.shields.io/badge/GitHub-fabio--barboza-181717?logo=github&logoColor=white)](https://github.com/fabio-barboza)
 
@@ -38,7 +44,11 @@ Java moderno:
   Claude, GPT, Gemini ou o que preferir mudando `base-url`, `api-key` e `chat.options.model` no
   `application.yml` do agent.
   Esta demo vem apontada para um modelo local (`qwen3.6:35b`) só para rodar offline e sem custo.
-Seguinte:   - **Eval do agente** — dataset de perguntas com a tool esperada, medindo a escolha do modelo. É o
+- **Observabilidade de LLM** — traces OTLP para o [Langfuse](https://langfuse.com): prompt,
+  resposta, tokens, qual tool MCP o modelo escolheu, com que argumentos e o que ela devolveu —
+  tudo agrupado por sessão de conversa. Opcional e desligado por padrão
+  ([como ligar](#observabilidade-langfuse)).
+- **Eval do agente** — dataset de perguntas com a tool esperada, medindo a escolha do modelo. É o
   que pega a regressão que teste de Java nenhum pega: a que mora no prompt. Roda só sob demanda
   (`-Peval`), porque depende de uma LLM de verdade.
 - **Um comando sobe tudo** — `./start.sh` orquestra Postgres, Flyway, seed, duas apps Spring Boot
@@ -62,7 +72,7 @@ logistic-api (Spring Boot :8081)
     │                  │
     │              Repository (Spring Data JPA)
     ▼
-PostgreSQL 18 (pgvector) :5432   ← docker compose + Flyway
+PostgreSQL 18 :5432             ← docker compose + Flyway
 ```
 
 ### Decisões de arquitetura
@@ -254,6 +264,80 @@ cd logistic-agent && ./mvnw spring-boot:run
 cd logistic-webui && npm install && npm run dev
 ```
 
+## Observabilidade (Langfuse)
+
+**Desligado por padrão.** Quem só quer rodar a demo não precisa de Langfuse nenhum: sem a flag,
+a stack sobe exatamente como antes, sem tracing e sem dependência externa.
+
+### Por que vale ligar
+
+Um agente com LLM é a parte do sistema que os logs contam pior. A resposta veio errada — foi o
+system prompt, foi a tool errada escolhida, foi o argumento que o modelo montou, ou foi a API que
+devolveu vazio? Com o log você vê "erro ao processar"; com o trace você vê a decisão inteira:
+
+- **Cada mensagem vira um trace `chat`**, agrupado pelo `sessionId` do webui — a conversa toda
+  numa timeline só, incluindo o "e em MG?" que depende da pergunta anterior.
+- **Cada chamada ao modelo** com o prompt exato (system prompt + histórico + retorno de tool),
+  a resposta, o modelo e a contagem de tokens — inclusive tokens em cache.
+- **Cada tool MCP executada**, com os argumentos que o modelo montou e o que a API devolveu. É
+  aqui que se enxerga o `executeQuery` que devia ter sido um `countOrdersBy`.
+- **Latência por etapa**, separando o que é o modelo pensando do que é a API buscando.
+
+É o mesmo problema que o [eval](#testes-e-eval) ataca por outro lado: o eval mede a escolha de
+tool em cima de um dataset fixo; o trace mostra o que aconteceu com a pergunta de verdade que o
+usuário fez. Rodar o eval com o Langfuse ligado dá as duas coisas — o veredito e o porquê.
+
+### Como ligar
+
+1. Suba o Langfuse — compose próprio, à parte da stack da aplicação, e o `start.sh` não
+   encosta nele:
+
+   ```bash
+   docker compose -f logistic-agent/docker-compose.yaml up -d
+   ```
+
+   A UI sobe em <http://localhost:8060>. Já tem um Langfuse rodando? Pule este passo e
+   aponte o `logistic-agent/.env` para ele.
+2. Copie o `.env.example` do agent — só isso:
+
+   ```bash
+   cp logistic-agent/.env.example logistic-agent/.env
+   ```
+
+   O compose provisiona projeto, usuário e o par de chaves no primeiro boot, e o
+   `.env.example` já vem com essas chaves. Login na UI: `admin@logistic.local` / `logistic123`.
+   Usando um Langfuse que já existe? Troque pelas chaves do seu projeto
+   (**Settings → API Keys**).
+3. `./start.sh` — ele lê o `logistic-agent/.env`, deriva o `LANGFUSE_AUTH` (base64 de
+   `public:secret`) e passa para o agent. Mande uma pergunta no chat e o trace aparece na UI
+   em segundos.
+
+Para desligar de novo: `LANGFUSE_ENABLED=false` (ou apague o `logistic-agent/.env`). Nada mais
+muda. E para derrubar o Langfuse:
+
+```bash
+docker compose -f logistic-agent/docker-compose.yaml down     # mantém os traces
+docker compose -f logistic-agent/docker-compose.yaml down -v  # apaga os traces também
+```
+
+Subindo o agent na mão, exporte as duas variáveis antes:
+
+```bash
+export LANGFUSE_ENABLED=true
+export LANGFUSE_AUTH=$(printf '%s:%s' "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" | base64 -w0)
+```
+
+### Como funciona
+
+O agent exporta OTLP direto para o endpoint OTel do Langfuse — sem SDK proprietário, sem collector
+no meio. O Spring AI já emite as observations (chamada ao modelo, tool calling, advisors); o
+`LangfuseObservabilityConfig` só acrescenta o que o Langfuse precisa para montar a tela: prompt e
+resposta como atributo de span, argumentos e retorno de cada tool, e o `sessionId` da conversa.
+Health check fica de fora do trace — senão o polling do `start.sh` viraria um trace por segundo.
+
+Trocar o Langfuse por outro backend OTLP (Jaeger, Tempo, Grafana Cloud) é mudar o endpoint no
+`application.yml`.
+
 ## Logs
 
 Cada app escreve num arquivo próprio; o terminal do script mostra só o progresso e as URLs.
@@ -296,7 +380,10 @@ Roteiro de demo e teste de fumaça, com o navegador em <http://localhost:5173>:
 > - o Postgres sobe com **credenciais padrão** (`postgres` / `postgres`) e a porta 5432 publicada;
 > - o **MCP server é aberto**, sem token, e inclui a tool `executeQuery`, que roda `SELECT` arbitrário
 >   (numa role read-only, mas ainda assim lê o banco inteiro);
-> - a role `logistic_ro` sobe com senha fixa no `V2__readonly_role.sql`, versionada no repositório.
+> - a role `logistic_ro` sobe com senha fixa no `V2__readonly_role.sql`, versionada no repositório;
+> - o Langfuse opcional segue a mesma linha: chaves de API, `ENCRYPTION_KEY` e senha de login
+>   versionadas no `logistic-agent/docker-compose.yaml`, e os traces guardam prompt e resposta
+>   em claro.
 >
 > Rode em `localhost`. Não publique em rede compartilhada nem na internet.
 

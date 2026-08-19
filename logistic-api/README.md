@@ -9,7 +9,7 @@ Visão geral e como subir tudo junto: [README da raiz](../README.md).
 ## Rodar isolado
 
 ```bash
-docker compose -f docker-compose.yaml up -d      # Postgres 18 (pgvector) na 5432
+docker compose -f docker-compose.yaml up -d      # Postgres 18 na 5432
 ./mvnw spring-boot:run                           # API na 8081, Flyway cria o schema
 ```
 

@@ -1,4 +1,4 @@
-server:
+yml para dizer se o server:
   port: 8080
 spring:
   application:
@@ -12,6 +12,11 @@ spring:
           model: qwen3.6:35B
           temperature: 0.7
           max-tokens: 16000
+    # log-prompt/log-completion do Spring AI só escrevem no log da aplicação; quem manda
+    # prompt e resposta para o Langfuse é o LangfuseObservabilityConfig, via atributo de span.
+    chat:
+      observations:
+        include-error-logging: true
     mcp:
       client:
         type: SYNC
@@ -23,6 +28,32 @@ spring:
             logistic:
               url: http://localhost:8081
               endpoint: /mcp
+
+# Observabilidade opcional: traces OTLP para o Langfuse.
+# Desligado por padrão — quem roda a stack sem Langfuse não precisa fazer nada.
+# Para ligar: preencha o .env da raiz (LANGFUSE_ENABLED=true + as chaves do projeto) e
+# suba pelo start.sh, que deriva o LANGFUSE_AUTH = base64("public-key:secret-key").
+langfuse:
+  enabled: ${LANGFUSE_ENABLED:false}
+
+management:
+  # O starter de OTel traz também o registry de métricas, que por padrão fica publicando
+  # para um collector em localhost:4318. Aqui só interessa trace.
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  tracing:
+    enabled: ${langfuse.enabled}
+    sampling:
+      probability: 1.0
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${LANGFUSE_OTLP_ENDPOINT:http://localhost:8060/api/public/otel/v1/traces}
+          headers:
+            Authorization: "Basic ${LANGFUSE_AUTH:}"
 
 springdoc:
   api-docs:

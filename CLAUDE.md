@@ -12,7 +12,7 @@ Três apps independentes num só repo (não é multi-módulo Maven — cada um t
 | `logistic-agent/` | Java 21, Spring Boot 4.0.6, Spring AI 2.0.0 (MCP **client**) | 8080 |
 | `logistic-api/` | Java 21, Spring Boot 4.0.6, JPA, Flyway, MCP **server** | 8081 |
 
-Postgres 18 (pgvector) em 5432, via `logistic-api/docker-compose.yaml` (container `logisticdb`).
+Postgres 18 em 5432, via `logistic-api/docker-compose.yaml` (container `logisticdb`).
 LLM local OpenAI-compatível esperada em `http://localhost:8200` (`qwen3.6:35b`) — opcional para subir a stack, obrigatória para o chat responder.
 
 Regra estruturante: **a LLM nunca toca o banco.** Ela chama tools MCP expostas pela `logistic-api`; só a API executa SQL. O `logistic-agent` não tem datasource nem dependência de banco no `pom.xml` — se aparecer a necessidade de dados lá, a resposta é uma tool MCP nova na API, não um repositório no agent.
@@ -64,6 +64,18 @@ Camadas: `controller/` (REST) e `mcp/` (tools) são **dois adaptadores sobre o m
 - `ChatClientConfig`: monta o `ChatClient` com o system prompt (em PT-BR, contém a política de escolha de tools e a tradução de status para o usuário), os tool callbacks MCP descobertos da API, o `RenderTool` local e `MessageChatMemoryAdvisor` (janela de 20 mensagens, in-memory — memória some no restart).
 - Padrão de render: `RenderTool.renderChart/renderTable` não devolvem dados ao modelo — gravam num `RenderHolder` **request-scoped**, e o `ChatService` lê o holder depois da chamada ao `ChatClient`, devolvendo `{ content, renderData }`. Alterar o escopo do holder vaza render entre requisições concorrentes.
 - `RenderableContent` é sealed + `@JsonTypeInfo(property = "type")`; o webui despacha por `renderData.type` (`chart`/`table`). Tipo novo = novo record permitido + `@JsonSubTypes` + branch no `main.js`.
+- Observabilidade (`LangfuseObservabilityConfig`): opcional, atrás da flag `langfuse.enabled`
+  (`LANGFUSE_ENABLED`, **default `false`**) — ela liga o `management.tracing.enabled` e é a condição
+  da própria `@Configuration`. Traces OTLP para o Langfuse (`http://localhost:8060`, stack comentada
+  em `logistic-agent/docker-compose.yaml`, subido à mão, fora do `start.sh`; provisiona projeto e
+  chaves via `LANGFUSE_INIT_*`, e o `ENCRYPTION_KEY` precisa de aspas ou o YAML lê como número), autenticados pelo header `Basic ${LANGFUSE_AUTH}` — base64
+  de `public:secret`, derivado pelo `start.sh` a partir do `logistic-agent/.env` (mesma convenção do
+  `logistic-webui/.env`: `.env` ignorado, `.env.example` versionado). Prompt, resposta e argumentos/retorno de tool viram atributos de span via
+  **`ObservationFilter`**, não `ObservationHandler`: no `onStop` do handler a span já foi encerrada pelo
+  tracing e as tags se perdem. As propriedades `spring.ai.chat.observations.log-*` só escrevem no log da
+  aplicação — não alimentam o Langfuse. O `ObservationPredicate` corta health checks, senão o polling do
+  `start.sh` gera um trace por segundo. Com a flag desligada não há Tracer no contexto — nada aqui
+  carrega, e o `ChatService` (que taga a span com `sessionId` e input/output do trace) vira no-op.
 - Ordem de subida importa: o agent faz handshake MCP no startup. Se a API não estiver respondendo `/actuator/health` antes, ele sobe sem as tools e o chat responde "erro ao processar" (`McpServerUnavailableFailureAnalyzer` registra a falha via `META-INF/spring.factories`).
 
 ### logistic-webui

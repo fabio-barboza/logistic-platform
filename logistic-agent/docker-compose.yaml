@@ -1,0 +1,164 @@
+# Stack do Langfuse (v3) para a observabilidade do logistic-agent.
+#
+# Opcional e à parte: o start.sh NÃO sobe nada daqui. A stack da aplicação roda sem isso —
+# só não exporta trace. Para usar:
+#
+#   docker compose -f logistic-agent/docker-compose.yaml up -d
+#   # UI em http://localhost:8060 → crie o projeto e um par de chaves em Settings → API Keys
+#   # preencha o .env da raiz (LANGFUSE_ENABLED=true + as chaves) e rode ./start.sh
+#
+#   docker compose -f logistic-agent/docker-compose.yaml down     # derruba, mantém os dados
+#   docker compose -f logistic-agent/docker-compose.yaml down -v  # apaga os traces também
+#
+# Já tem um Langfuse rodando? Ignore este arquivo e aponte o LANGFUSE_OTLP_ENDPOINT do .env
+# para ele.
+#
+# Senhas fixas de propósito: ambiente local, mesmo critério do resto da stack. Não exponha
+# em rede.
+services:
+  langfuse-web:
+    image: langfuse/langfuse:3
+    container_name: langfuse-web
+    restart: unless-stopped
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+    ports:
+      - "8060:3000"
+    environment: &langfuse-env
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
+      SALT: mysalt
+      # Precisa ir entre aspas: sem elas o YAML lê como número e o Langfuse recusa a chave.
+      # Gere a sua com: openssl rand -hex 32
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      NEXTAUTH_URL: http://localhost:8060
+      NEXTAUTH_SECRET: mysecret
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: myredissecret
+      REDIS_TLS_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      # Provisiona org, projeto, usuário e o par de chaves já no primeiro boot — são as
+      # mesmas chaves que estão no .env.example, então não precisa clicar em nada na UI.
+      # Login: admin@logistic.local / logistic123
+      LANGFUSE_INIT_ORG_ID: logistic-platform
+      LANGFUSE_INIT_ORG_NAME: Logistic Platform
+      LANGFUSE_INIT_PROJECT_ID: logistic-platform
+      LANGFUSE_INIT_PROJECT_NAME: logistic-platform
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-logistic-platform
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-logistic-platform
+      LANGFUSE_INIT_USER_EMAIL: admin@logistic.local
+      LANGFUSE_INIT_USER_NAME: Admin
+      LANGFUSE_INIT_USER_PASSWORD: logistic123
+
+  # Consome a fila do Redis e grava os traces no ClickHouse. Sem ele a UI abre, mas
+  # trace nenhum aparece.
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    container_name: langfuse-worker
+    restart: unless-stopped
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+    environment:
+      <<: *langfuse-env
+
+  # Metadados do Langfuse (projetos, chaves, usuários) — separado do logisticdb de propósito.
+  langfuse-postgres:
+    image: postgres:16
+    container_name: langfuse-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U langfuse -d langfuse" ]
+      interval: 5s
+      retries: 10
+
+  # Onde os traces realmente moram (OLAP).
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server
+    container_name: langfuse-clickhouse
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      retries: 10
+      start_period: 1s
+
+  # Fila entre web e worker.
+  langfuse-redis:
+    image: redis:7
+    container_name: langfuse-redis
+    restart: unless-stopped
+    command: --requirepass myredissecret
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-a", "myredissecret", "--no-auth-warning", "ping" ]
+      interval: 3s
+      retries: 10
+
+  # Guarda os eventos brutos e as mídias (S3 compatível).
+  langfuse-minio:
+    image: minio/minio
+    container_name: langfuse-minio
+    restart: unless-stopped
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniosecret
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: [ "CMD", "mc", "ready", "local" ]
+      interval: 5s
+      retries: 10
+
+volumes:
+  langfuse_postgres_data:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_minio_data:

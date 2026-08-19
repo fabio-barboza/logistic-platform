@@ -387,6 +387,44 @@ function Start-Postgres {
     }
 }
 
+# Carrega o logistic-agent\.env (gitignored) e deriva o LANGFUSE_AUTH usado pelo agent para
+# exportar traces OTLP. Observabilidade é opcional: sem .env (ou com LANGFUSE_ENABLED
+# diferente de true) o agent sobe sem tracing nenhum.
+function Import-DotEnv {
+    $envFile = Join-Path $RootDir 'logistic-agent\.env'
+    if (Test-Path $envFile) {
+        foreach ($line in Get-Content $envFile) {
+            $trimmed = $line.Trim()
+            if ($trimmed -eq '' -or $trimmed.StartsWith('#')) { continue }
+            $pair = $trimmed -split '=', 2
+            if ($pair.Count -ne 2) { continue }
+            $name  = $pair[0].Trim()
+            $value = $pair[1].Trim().Trim('"').Trim("'")
+            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+        }
+    }
+
+    if ($env:LANGFUSE_ENABLED -ne 'true') {
+        Write-Info 'Langfuse: desligado (LANGFUSE_ENABLED != true em logistic-agent\.env)'
+        return
+    }
+
+    $publicKey = $env:LANGFUSE_PUBLIC_KEY
+    $secretKey = $env:LANGFUSE_SECRET_KEY
+    if (-not $env:LANGFUSE_AUTH -and $publicKey -and $secretKey) {
+        $bytes = [Text.Encoding]::UTF8.GetBytes("${publicKey}:${secretKey}")
+        $env:LANGFUSE_AUTH = [Convert]::ToBase64String($bytes)
+    }
+
+    if ($env:LANGFUSE_AUTH) {
+        $baseUrl = if ($env:LANGFUSE_BASE_URL) { $env:LANGFUSE_BASE_URL } else { 'http://localhost:8060' }
+        Write-Info "Langfuse: traces do agent vão para $baseUrl"
+    }
+    else {
+        Write-Warn 'Langfuse ligado sem LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY em logistic-agent\.env — o export vai falhar'
+    }
+}
+
 function Start-BackgroundApp {
     param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory, [string]$LogFile)
 
@@ -577,6 +615,7 @@ try {
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 
     Test-Prereqs
+Import-DotEnv
     Invoke-BuildAll
     Start-Postgres
     Start-Api
