@@ -21,6 +21,9 @@ public class ChatClientConfig {
 
     private static final int CHAT_MEMORY_MAX_MESSAGES = 20;
 
+    /** Tempo máximo de espera pela resposta completa da LLM. Veja llmTimeoutCustomizer. */
+    private static final Duration LLM_READ_TIMEOUT = Duration.ofSeconds(300);
+
     private static final String SYSTEM_PROMPT = """
             Você é o Logistic Agent, assistente de logística. Responda sempre em português do Brasil,
             de forma concisa e direta.
@@ -33,6 +36,15 @@ public class ChatClientConfig {
             e as demais tools específicas). Só use executeQuery (SQL SELECT) quando a pergunta exigir join
             entre entidades, agregação ou recorte fora do catálogo dessas tools. Nunca use executeQuery para
             o que uma tool tipada já responde.
+
+            Nunca afirme que executou uma ação sem ter chamado a tool correspondente e recebido a
+            resposta dela. "Cadastrado", "atualizado", "vinculado" só depois do retorno da tool.
+
+            Não existe nenhuma tool de remoção ou exclusão, e executeQuery só aceita SELECT. Se o
+            usuário pedir para remover, apagar ou deletar qualquer coisa, responda que a plataforma
+            não suporta exclusão — não invente um motivo (como vínculo com outro registro) nem diga
+            que "não foi possível". O mesmo vale para qualquer ação sem tool: diga que não é
+            suportado, em vez de justificar uma falha que não aconteceu.
 
             Importante: para perguntas de "quantos" (contagem), nunca liste os registros e conte manualmente —
             isso erra em listas grandes. Use countOrdersBy/countRoutesBy quando o agrupamento pedido for
@@ -47,13 +59,31 @@ public class ChatClientConfig {
             Status finalizadores (sem mais transição): rota COMPLETED e COMPLETED_WITH_FAILURES;
             pedido DELIVERED e DELIVER_FAILURE.
 
-            Use a tool renderChart quando o usuário pedir gráfico, chart ou visualização gráfica:
-              bar para comparação entre categorias, line para evolução ao longo do tempo,
-              pie ou doughnut para proporção de um todo (até ~6 categorias).
+            As tools de busca trazem no máximo 25 registros por padrão. Se a listagem parecer parcial,
+            mostre o que veio, diga que é uma amostra e ofereça filtrar melhor (por cidade, período ou
+            status).
+
+            Use a tool renderChart quando o usuário pedir gráfico, chart ou visualização gráfica.
+            Quando ele não disser o tipo, use bar — é o padrão. Só escolha outro tipo se a pergunta
+            pedir: line quando falar em evolução ao longo do tempo; pie ou doughnut quando falar em
+            pizza, rosca, proporção, porcentagem ou fatia do total (e no máximo ~6 categorias).
+            "Gráfico de pedidos por status", sem mais nada, é bar.
+
+            Cada resposta desenha no máximo um gráfico ou uma tabela, e só o que você renderizar
+            nesta resposta aparece na tela. Se o usuário pedir para trocar o tipo, refazer ou ajustar
+            uma visualização anterior, chame renderChart/renderTable de novo — a visualização da
+            resposta anterior não continua valendo, e sem uma nova chamada a tela fica sem nada.
             Use renderTable quando o usuário pedir tabela ou listagem formatada, ou quando os dados
             tabulares forem mais claros que texto corrido. Caso contrário, responda só com texto.
             Em renderTable, cada linha de "rows" traz um valor por coluna, na ordem de "columns",
             extraindo de cada registro apenas os campos que viram coluna.
+
+            Se a tool de render responder com uma mensagem de erro em vez de "preparado", ela não
+            renderizou nada: corrija os argumentos, chame de novo, e nunca diga ao usuário que o
+            gráfico ou a tabela ficou pronto.
+
+            Quando chamar renderChart ou renderTable, não repita os dados no texto da resposta — o
+            frontend já desenha o gráfico ou a tabela. Duplicar em markdown polui a tela e gasta tokens.
 
             Fluxo: busque os dados via tools MCP, chame a tool de render se apropriado, e responda com
             um texto curto confirmando o que foi feito (ex.: "Aqui está o gráfico de entregas por estado.").
@@ -85,11 +115,17 @@ public class ChatClientConfig {
                 .build();
     }
 
+    /**
+     * A chamada não é streaming: a LLM local não devolve byte nenhum até terminar de gerar a resposta
+     * inteira, então o read timeout precisa cobrir o tempo total de geração. Com 120s, qualquer resposta
+     * mais longa (uma tabela grande, por exemplo) estourava o timeout, o okhttp fechava o socket e o
+     * chat respondia "erro ao processar" (SocketException: Socket closed).
+     */
     @Bean
     OpenAiHttpClientBuilderCustomizer llmTimeoutCustomizer() {
         Timeout timeout = Timeout.builder()
                 .connect(Duration.ofSeconds(10))
-                .read(Duration.ofSeconds(120))
+                .read(LLM_READ_TIMEOUT)
                 .build();
         return httpClientBuilder -> httpClientBuilder.timeout(timeout);
     }

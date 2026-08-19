@@ -42,7 +42,7 @@ public class OrderMcpTools {
             @McpToolParam(required = false, description = "Data/hora mínima de criação (ISO). Exemplo: \"2025-01-01T00:00:00\"") LocalDateTime createdFrom,
             @McpToolParam(required = false, description = "Data/hora máxima de criação (ISO). Exemplo: \"2025-12-31T23:59:59\"") LocalDateTime createdTo,
             @McpToolParam(required = false, description = "true para trazer só pedidos ainda sem rota alocada (route_id nulo)") Boolean unassigned,
-            @McpToolParam(required = false, description = "Quantidade máxima de resultados. Default 100, máximo 500") Integer limit) {
+            @McpToolParam(required = false, description = "Quantidade máxima de resultados. Default 25, máximo 100") Integer limit) {
         OrderFilter filter = new OrderFilter(toOrderStatusList(status), routeId, city, state,
                 neighborhood, zipCode, createdFrom, createdTo, unassigned);
         Pageable pageable = McpPageSupport.of(limit);

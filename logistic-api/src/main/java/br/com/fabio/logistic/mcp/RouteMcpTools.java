@@ -38,7 +38,7 @@ public class RouteMcpTools {
             @McpToolParam(required = false, description = "Parte do nome do motorista da rota. Exemplo: \"joão\"") String driverName,
             @McpToolParam(required = false, description = "Data/hora mínima de criação (ISO). Exemplo: \"2025-01-01T00:00:00\"") LocalDateTime createdFrom,
             @McpToolParam(required = false, description = "Data/hora máxima de criação (ISO). Exemplo: \"2025-12-31T23:59:59\"") LocalDateTime createdTo,
-            @McpToolParam(required = false, description = "Quantidade máxima de resultados. Default 100, máximo 500") Integer limit) {
+            @McpToolParam(required = false, description = "Quantidade máxima de resultados. Default 25, máximo 100") Integer limit) {
         RouteFilter filter = new RouteFilter(toRouteStatusList(status), driverId, driverName, createdFrom, createdTo);
         Pageable pageable = McpPageSupport.of(limit);
         return routeService.search(filter, pageable).getContent();

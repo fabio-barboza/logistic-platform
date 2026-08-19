@@ -12,6 +12,14 @@ spring:
           model: qwen3.6:35B
           temperature: 0.7
           max-tokens: 16000
+          # Desliga o reasoning do Qwen3.6. O llama-server sobe com --jinja e o template do modelo
+          # ativa o thinking por padrão: cada chamada gastava algumas centenas de tokens de
+          # <think> antes de emitir a tool call ou a resposta. Como o agent só escolhe tool e
+          # formata resultado, o reasoning não agrega e só custa latência.
+          # Chaves entre colchetes para o binder do Spring não normalizar o underscore.
+          extra-body:
+            "[chat_template_kwargs]":
+              "[enable_thinking]": false
     # log-prompt/log-completion do Spring AI só escrevem no log da aplicação; quem manda
     # prompt e resposta para o Langfuse é o LangfuseObservabilityConfig, via atributo de span.
     chat:

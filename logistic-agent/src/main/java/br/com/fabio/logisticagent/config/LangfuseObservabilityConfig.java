@@ -10,6 +10,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.server.observation.ServerRequestObservationContext;
+import org.springframework.scheduling.support.ScheduledTaskObservationContext;
 import org.springframework.util.CollectionUtils;
 
 import java.util.stream.Collectors;
@@ -31,7 +32,11 @@ public class LangfuseObservabilityConfig {
 
     /**
      * Health checks são chamados em loop pelo start.sh e pelo webui; virariam um trace
-     * vazio por segundo no Langfuse.
+     * vazio por segundo no Langfuse. Dois caminhos geram esse ruído, e os dois precisam ser
+     * cortados: a requisição HTTP que chega (ServerRequestObservationContext) e o
+     * {@code @Scheduled} do BackendHealthIndicator, que o Spring observa por conta própria
+     * como "tasks.scheduled.execution" — esse último produzia um trace de 5ms a cada 15s.
+     * O Langfuse é para as conversas; nenhuma task agendada do agent tem valor lá.
      */
     @Bean
     ObservationPredicate skipHealthChecks() {
@@ -40,7 +45,7 @@ public class LangfuseObservabilityConfig {
                 String path = serverContext.getCarrier().getRequestURI();
                 return !path.startsWith("/actuator") && !path.equals("/api/chat/health");
             }
-            return true;
+            return !(context instanceof ScheduledTaskObservationContext);
         };
     }
 

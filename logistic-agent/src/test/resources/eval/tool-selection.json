@@ -365,5 +365,109 @@
     "render": "chart",
     "chartType": "bar",
     "maxCalls": 1
+  },
+  {
+    "id": "delete-vehicle-not-supported",
+    "question": "remova o veículo Truck X da frota",
+    "forbid": [
+      "executeQuery",
+      "createVehicle",
+      "updateOrderStatus",
+      "updateRouteStatus"
+    ],
+    "expectText": [
+      "suport"
+    ],
+    "forbidText": [
+      "vinculado",
+      "não foi possível remover",
+      "removido com sucesso"
+    ],
+    "render": "none"
+  },
+  {
+    "id": "delete-order-not-supported",
+    "question": "apague o pedido mais antigo",
+    "forbid": [
+      "executeQuery",
+      "updateOrderStatus"
+    ],
+    "expectText": [
+      "suport"
+    ],
+    "forbidText": [
+      "apaguei",
+      "removido com sucesso"
+    ],
+    "render": "none"
+  },
+  {
+    "id": "create-vehicle-calls-tool",
+    "question": "cadastre um veículo chamado Eval Bot com capacidade 7",
+    "expectAnyOf": [
+      "createVehicle"
+    ],
+    "expectArgs": [
+      "\"Eval Bot\"",
+      "7"
+    ],
+    "forbid": [
+      "executeQuery"
+    ],
+    "maxCalls": 2,
+    "render": "none"
+  },
+  {
+    "id": "chart-pie-all-status-categories",
+    "question": "gráfico de pizza de pedidos por status",
+    "expectAnyOf": [
+      "countOrdersBy"
+    ],
+    "expectArgs": [
+      "\"status\""
+    ],
+    "render": "chart",
+    "chartType": "pie"
+  },
+  {
+    "id": "render-without-duplicated-table",
+    "question": "mostre numa tabela os veículos com capacidade acima de 150",
+    "expectAnyOf": [
+      "searchVehicles"
+    ],
+    "render": "table",
+    "forbidText": [
+      "---|",
+      "| ---"
+    ]
+  },
+  {
+    "id": "chart-defaults-to-bar",
+    "question": "gráfico de pedidos por status",
+    "expectAnyOf": [
+      "countOrdersBy"
+    ],
+    "expectArgs": [
+      "\"status\""
+    ],
+    "render": "chart",
+    "chartType": "bar"
+  },
+  {
+    "id": "chart-retype-followup",
+    "setup": "gráfico de pedidos por status",
+    "question": "refaça em barras",
+    "render": "chart",
+    "chartType": "bar",
+    "maxCalls": 2
+  },
+  {
+    "id": "chart-pie-only-when-asked",
+    "question": "qual a proporção de pedidos por status? mostre em pizza",
+    "expectAnyOf": [
+      "countOrdersBy"
+    ],
+    "render": "chart",
+    "chartType": "pie"
   }
 ]

@@ -47,6 +47,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  * argumentos, número de chamadas, render e texto da resposta) e só passa se todas fecharem —
  * chamar a tool certa com o filtro errado é resposta errada, não acerto parcial.
  *
+ * <p>O dataset é quase todo de leitura, com uma exceção deliberada: {@code create-vehicle-calls-tool}
+ * grava de verdade um veículo "Eval Bot" via createVehicle. É o único jeito de testar a regra de que
+ * o modelo não pode confirmar um cadastro sem ter chamado a tool — a falha que motivou a regra era
+ * exatamente uma confirmação sem escrita nenhuma. Cada execução da eval deixa mais um "Eval Bot" no
+ * banco; {@code ./start.sh --reset} limpa.
+ *
+ * <p>Todo trecho do system prompt que descreve comportamento (não usar executeQuery no lugar de tool
+ * tipada, não suportar exclusão, não confirmar ação sem chamada de tool, traduzir status) deve ter
+ * caso aqui. Regra de prompt sem caso é regra que ninguém percebe quando para de valer.
+ *
  * <p>O assert é sobre a <b>taxa de acerto</b> do dataset, não sobre cada caso: com LLM, um caso
  * isolado falha por ruído e um assert exato deixaria o build vermelho de forma aleatória. O dataset
  * tem casos difíceis de propósito — 100% não é o esperado, e um piso alto demais é convite a

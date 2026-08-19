@@ -32,7 +32,7 @@ public class VehicleMcpTools {
             @McpToolParam(required = false, description = "Capacidade mínima de carga") Integer capacityMin,
             @McpToolParam(required = false, description = "Capacidade máxima de carga") Integer capacityMax,
             @McpToolParam(required = false, description = "Id do motorista ao qual o veículo está vinculado") UUID driverId,
-            @McpToolParam(required = false, description = "Quantidade máxima de resultados. Default 100, máximo 500") Integer limit) {
+            @McpToolParam(required = false, description = "Quantidade máxima de resultados. Default 25, máximo 100") Integer limit) {
         VehicleFilter filter = new VehicleFilter(name, capacityMin, capacityMax, driverId);
         Pageable pageable = McpPageSupport.of(limit);
         return vehicleService.search(filter, pageable).getContent();

@@ -37,7 +37,7 @@ public class DriverMcpTools {
             @McpToolParam(required = false, description = "Data de nascimento mínima (ISO yyyy-MM-dd). Exemplo: \"1980-01-01\"") LocalDate birthdayFrom,
             @McpToolParam(required = false, description = "Data de nascimento máxima (ISO yyyy-MM-dd). Exemplo: \"2000-12-31\"") LocalDate birthdayTo,
             @McpToolParam(required = false, description = "Id do veículo ao qual o motorista está vinculado") UUID vehicleId,
-            @McpToolParam(required = false, description = "Quantidade máxima de resultados. Default 100, máximo 500") Integer limit) {
+            @McpToolParam(required = false, description = "Quantidade máxima de resultados. Default 25, máximo 100") Integer limit) {
         DriverFilter filter = new DriverFilter(name, email, city, state, birthdayFrom, birthdayTo, vehicleId);
         Pageable pageable = McpPageSupport.of(limit);
         return driverService.search(filter, pageable).getContent();

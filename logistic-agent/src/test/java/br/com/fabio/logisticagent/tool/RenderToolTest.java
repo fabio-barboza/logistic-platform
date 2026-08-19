@@ -45,6 +45,55 @@ class RenderToolTest {
     }
 
     @Test
+    void renderChartWithoutDatasetsReturnsErrorAndStoresNothing() {
+        String result = renderTool.renderChart("Título", "pie", List.of("SP", "RJ"), null);
+
+        assertThat(result).contains("datasets");
+        assertThat(renderHolder.get()).isNull();
+    }
+
+    @Test
+    void renderChartWithoutLabelsReturnsErrorAndStoresNothing() {
+        String result = renderTool.renderChart("Título", "pie", List.of(),
+                List.of(new Dataset("Pedidos", List.of(1, 2))));
+
+        assertThat(result).contains("labels");
+        assertThat(renderHolder.get()).isNull();
+    }
+
+    /**
+     * O caso que apareceu em produção: o modelo mandou 4 rótulos para 5 status. Antes a tool
+     * respondia "preparado", o modelo dizia ao usuário que o gráfico estava pronto, e o webui
+     * quebrava ou desenhava um gráfico incompleto.
+     */
+    @Test
+    void renderChartWithDataSmallerThanLabelsReturnsErrorAndStoresNothing() {
+        String result = renderTool.renderChart("Pedidos por status", "pie",
+                List.of("IN_ROUTE", "DELIVERED", "DELIVER_FAILURE", "COLLECTED", "CANCELED"),
+                List.of(new Dataset("Pedidos", List.of(209, 1844, 737, 210))));
+
+        assertThat(result).contains("4 valores").contains("5 rótulos");
+        assertThat(renderHolder.get()).isNull();
+    }
+
+    @Test
+    void renderTableWithRaggedRowReturnsErrorAndStoresNothing() {
+        String result = renderTool.renderTable("Entregas", List.of("Estado", "Entregas"),
+                List.of(List.of("SP", "42"), List.of("RJ")));
+
+        assertThat(result).contains("linha 2");
+        assertThat(renderHolder.get()).isNull();
+    }
+
+    @Test
+    void renderTableWithoutRowsReturnsErrorAndStoresNothing() {
+        String result = renderTool.renderTable("Entregas", List.of("Estado"), List.of());
+
+        assertThat(result).contains("rows");
+        assertThat(renderHolder.get()).isNull();
+    }
+
+    @Test
     void renderTableWithValidArgumentsStoresTableContent() {
         List<String> columns = List.of("Estado", "Entregas");
         List<List<String>> rows = List.of(List.of("SP", "42"), List.of("RJ", "30"));

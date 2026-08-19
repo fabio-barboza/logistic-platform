@@ -4,6 +4,9 @@ import Chart from 'chart.js/auto'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api/chat'
 const HEALTH_URL = API_URL + '/health'
+// Um pouco acima do read timeout da LLM no agent (300s), para o erro do servidor chegar antes
+// de o cliente desistir. Sem isso o fetch fica pendurado indefinidamente.
+const REQUEST_TIMEOUT_MS = 310000
 const THEME_KEY = 'lp-theme'
 const SESSION_KEY = 'chat-session-id'
 
@@ -78,7 +81,11 @@ function generateSessionId() {
     return 'session-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9)
 }
 
-let sessionId = localStorage.getItem(SESSION_KEY) || generateSessionId()
+// Sessão nova a cada carregamento da página, de propósito. O histórico das mensagens vive só
+// no DOM e não sobrevive a um F5, mas a ChatMemory do agent é indexada pelo sessionId e
+// sobrevive. Reaproveitar o id do localStorage deixava o modelo enxergando uma conversa que o
+// usuário já não vê na tela — ele voltava a responder sobre o assunto anterior.
+let sessionId = generateSessionId()
 localStorage.setItem(SESSION_KEY, sessionId)
 
 /* ---------- Elementos ---------- */
@@ -180,10 +187,21 @@ function addAssistantMessage(content, renderData) {
     }
 
     if (renderData) {
-        if (renderData.type === 'chart') {
-            bubble.appendChild(buildChart(renderData))
-        } else if (renderData.type === 'table') {
-            bubble.appendChild(buildTable(renderData))
+        // Os dados de render são montados pela LLM, então podem vir incompletos (dataset sem
+        // 'data', linha com menos colunas). Sem este guard, um TypeError aqui aborta o resto da
+        // renderização e a mensagem fica só com o texto, sem nenhum sinal do que houve.
+        try {
+            if (renderData.type === 'chart') {
+                bubble.appendChild(buildChart(renderData))
+            } else if (renderData.type === 'table') {
+                bubble.appendChild(buildTable(renderData))
+            }
+        } catch (err) {
+            console.error('Falha ao renderizar renderData', renderData, err)
+            const note = document.createElement('p')
+            note.className = 'render-note'
+            note.textContent = 'Não foi possível renderizar a visualização (dados incompletos). Peça novamente.'
+            bubble.appendChild(note)
         }
     }
 
@@ -349,7 +367,7 @@ function buildTable(data) {
 const SUGGESTIONS = [
     { icon: 'truck', text: 'Quantos motoristas existem?' },
     { icon: 'chart', text: 'Gráfico de pedidos por status' },
-    { icon: 'package', text: 'Liste os pedidos entregues em SP' },
+    { icon: 'package', text: 'Liste 10 pedidos entregues em SP' },
     { icon: 'route', text: 'Gráfico de pizza de rotas por status' },
     { icon: 'activity', text: 'Qual a taxa de falha de entrega por estado?' },
     { icon: 'plusCircle', text: 'Cadastre um veículo chamado Truck X com capacidade 180' },
@@ -405,19 +423,29 @@ async function sendText(raw) {
     addUserMessage(text)
     const loading = addLoadingMessage()
 
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+
     try {
         const response = await fetch(API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sessionId, message: text }),
+            signal: controller.signal,
         })
 
         const data = await response.json()
         loading.closest('.msg').remove()
         addAssistantMessage(data.content, data.renderData)
-    } catch {
+    } catch (err) {
         loading.closest('.msg').remove()
-        addErrorMessage('Não foi possível conectar ao agente. Verifique se o logistic-agent está rodando (porta 8080) e a LLM local no ar.')
+        if (err.name === 'AbortError') {
+            addErrorMessage('A LLM demorou demais para responder e a requisição foi cancelada. Tente uma pergunta mais específica (filtre por cidade, período ou status) ou peça uma lista menor.')
+        } else {
+            addErrorMessage('Não foi possível conectar ao agente. Verifique se o logistic-agent está rodando (porta 8080) e a LLM local no ar.')
+        }
+    } finally {
+        clearTimeout(timeoutId)
     }
 
     sending = false
