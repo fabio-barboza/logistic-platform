@@ -106,4 +106,24 @@ class RenderToolTest {
         assertThat(table.columns()).isEqualTo(columns);
         assertThat(table.rows()).isEqualTo(rows);
     }
+
+    @Test
+    void renderChartWithMismatchedDataRecordsErrorInHolder() {
+        renderTool.renderChart("Título", "bar", List.of("SP", "RJ"),
+                List.of(new Dataset("Pedidos", List.of(1))));
+
+        assertThat(renderHolder.get()).isNull();
+        assertThat(renderHolder.getError()).contains("1 valores, mas labels tem 2 rótulos");
+    }
+
+    @Test
+    void successfulRenderAfterRejectionClearsError() {
+        renderTool.renderTable("Título", List.of("Estado"), List.of());
+        assertThat(renderHolder.getError()).isNotNull();
+
+        renderTool.renderTable("Título", List.of("Estado"), List.of(List.of("SP")));
+
+        assertThat(renderHolder.get()).isInstanceOf(TableContent.class);
+        assertThat(renderHolder.getError()).isNull();
+    }
 }

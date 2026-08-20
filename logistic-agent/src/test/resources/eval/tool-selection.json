@@ -469,5 +469,22 @@
     ],
     "render": "chart",
     "chartType": "pie"
+  },
+  {
+    "id": "drivers-with-most-failures-in-state",
+    "question": "quais os motoristas de SC que mais tiveram problemas de entrega?",
+    "expectAnyOf": [
+      "executeQuery"
+    ],
+    "maxCalls": 3,
+    "render": "none"
+  },
+  {
+    "id": "pie-chart-after-driver-listing",
+    "setup": "quais os motoristas de SC que mais tiveram problemas de entrega?",
+    "question": "gere um gráfico de pizza",
+    "render": "chart",
+    "chartType": "pie",
+    "maxCalls": 3
   }
 ]
