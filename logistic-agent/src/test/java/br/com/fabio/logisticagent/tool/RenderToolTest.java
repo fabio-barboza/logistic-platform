@@ -164,4 +164,98 @@ class RenderToolTest {
         assertThat(renderHolder.get()).isNull();
         assertThat(renderHolder.getError()).isNotNull();
     }
+
+    @Test
+    void renderTableAfterChartIsRefusedAndKeepsFirstVisualization() {
+        renderTool.renderChart("Entregas por estado", "bar", List.of("SP", "RJ"),
+                List.of(new Dataset("Entregas", List.of(42, 30))));
+
+        String result = renderTool.renderTable("Entregas por estado", List.of("Estado", "Entregas"),
+                List.of(List.of("SP", "42"), List.of("RJ", "30")));
+
+        assertThat(result).contains("no máximo");
+        assertThat(renderHolder.get()).isInstanceOf(ChartContent.class);
+    }
+
+    @Test
+    void renderChartAfterTableIsRefusedAndKeepsFirstVisualization() {
+        renderTool.renderTable("Entregas por estado", List.of("Estado", "Entregas"),
+                List.of(List.of("SP", "42")));
+
+        String result = renderTool.renderChart("Entregas por estado", "bar", List.of("SP"),
+                List.of(new Dataset("Entregas", List.of(42))));
+
+        assertThat(result).contains("no máximo");
+        assertThat(renderHolder.get()).isInstanceOf(TableContent.class);
+    }
+
+    @Test
+    void renderChartWithoutUserRequestIsIgnored() {
+        renderHolder.setRenderAllowed(false);
+
+        String result = renderTool.renderChart("Taxa de falha", "bar", List.of("SP"),
+                List.of(new Dataset("Falhas", List.of(42))));
+
+        assertThat(result).contains("não pediu");
+        assertThat(renderHolder.get()).isNull();
+        assertThat(renderHolder.getError()).isNull();
+    }
+
+    @Test
+    void renderTableWithoutUserRequestIsIgnored() {
+        renderHolder.setRenderAllowed(false);
+
+        String result = renderTool.renderTable("Taxa de falha", List.of("Estado"), List.of(List.of("SP")));
+
+        assertThat(result).contains("não pediu");
+        assertThat(renderHolder.get()).isNull();
+        assertThat(renderHolder.getError()).isNull();
+    }
+
+    /** Recusa que só repete a crítica não encerra o loop de tool calls: no teto, a chamada passa. */
+    @Test
+    void insistingAfterPolicyRefusalRendersAndEndsTheLoop() {
+        renderHolder.setRenderAllowed(false);
+        List<Dataset> datasets = List.of(new Dataset("Falhas", List.of(42)));
+
+        String first = renderTool.renderChart("Taxa de falha", "bar", List.of("SP"), datasets);
+        String second = renderTool.renderChart("Taxa de falha", "bar", List.of("SP"), datasets);
+
+        assertThat(first).contains("não pediu");
+        assertThat(second).contains("preparado");
+        assertThat(renderHolder.get()).isInstanceOf(ChartContent.class);
+    }
+
+    @Test
+    void insistingAfterSecondVisualizationRefusalOverwritesAndEndsTheLoop() {
+        renderTool.renderChart("Falhas", "bar", List.of("SP"), List.of(new Dataset("Falhas", List.of(42))));
+
+        String first = renderTool.renderTable("Falhas", List.of("Estado"), List.of(List.of("SP")));
+        String second = renderTool.renderTable("Falhas", List.of("Estado"), List.of(List.of("SP")));
+
+        assertThat(first).contains("no máximo uma");
+        assertThat(second).contains("preparada");
+        assertThat(renderHolder.get()).isInstanceOf(TableContent.class);
+    }
+
+    @Test
+    void tableCellsWithStatusAreTranslatedToPortuguese() {
+        renderTool.renderTable("Pedidos em SP", List.of("Cidade", "Status"),
+                List.of(List.of("Campinas", "DELIVERED"), List.of("Santos", "IN_ROUTE")));
+
+        TableContent table = (TableContent) renderHolder.get();
+        assertThat(table.rows()).containsExactly(
+                List.of("Campinas", "Entregue"), List.of("Santos", "Em rota"));
+    }
+
+    @Test
+    void chartLabelsWithStatusAreTranslatedToPortuguese() {
+        renderTool.renderChart("Pedidos por status", "bar",
+                List.of("DELIVER_FAILURE", "COMPLETED_WITH_FAILURES", "SP"),
+                List.of(new Dataset("Pedidos", List.of(1, 2, 3))));
+
+        ChartContent chart = (ChartContent) renderHolder.get();
+        assertThat(chart.labels())
+                .containsExactly("Falha na entrega", "Concluído com falhas", "SP");
+    }
 }

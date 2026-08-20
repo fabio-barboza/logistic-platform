@@ -141,4 +141,98 @@ class ChatServiceTest {
         assertThat(response.content()).isEqualTo("Há 42 pedidos entregues em SP.");
         assertThat(llmCalls).hasValue(1);
     }
+
+    @Test
+    void renderIsBlockedWhenUserDidNotAskForVisualization() {
+        whenLlmAnswers().thenAnswer(counting(invocation -> "A taxa de falha em SP é 18,8%."));
+
+        ChatMessageDTO response = chatService.respond("qual a taxa de falha de entrega por estado?", "sessao-1");
+
+        assertThat(renderHolder.isRenderAllowed()).isFalse();
+        assertThat(response.renderData()).isNull();
+        assertThat(llmCalls).hasValue(1);
+    }
+
+    /** Sem render permitido, "posso mostrar em gráfico?" não pode disparar o retry corretivo. */
+    @Test
+    void offerOfChartDoesNotTriggerRetryWhenRenderIsBlocked() {
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "A taxa de falha em SP é 18,8%. Posso mostrar isso em gráfico, se quiser."));
+
+        ChatMessageDTO response = chatService.respond("qual a taxa de falha por estado?", "sessao-1");
+
+        assertThat(response.renderData()).isNull();
+        assertThat(llmCalls).hasValue(1);
+    }
+
+    @Test
+    void markdownTableIsStrippedWhenResponseHasRender() {
+        whenLlmAnswers().thenAnswer(counting(invocation -> {
+            renderHolder.set(CHART);
+            return """
+                    Aqui está o gráfico:
+
+                    | Estado | Falhas |
+                    |--------|--------|
+                    | SC     | 11     |
+
+                    SC lidera as falhas.""";
+        }));
+
+        ChatMessageDTO response = chatService.respond("faça um gráfico de falhas por estado", "sessao-1");
+
+        assertThat(response.content())
+                .doesNotContain("|")
+                .startsWith("Aqui está o gráfico:")
+                .endsWith("SC lidera as falhas.");
+    }
+
+    /** "sim" logo depois de o agente oferecer o gráfico é pedido de visualização. */
+    @Test
+    void yesAfterVisualOfferAllowsRender() {
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "A taxa de falha em SP é 18,8%. Posso mostrar isso em gráfico, se quiser."));
+        chatService.respond("qual a taxa de falha por estado?", "sessao-1");
+
+        whenLlmAnswers().thenAnswer(counting(invocation -> {
+            assertThat(renderHolder.isRenderAllowed()).isTrue();
+            renderHolder.set(CHART);
+            return "Aqui está o gráfico.";
+        }));
+        ChatMessageDTO response = chatService.respond("sim", "sessao-1");
+
+        assertThat(response.renderData()).isEqualTo(CHART);
+    }
+
+    /** Sem oferta pendente, "sim" não libera render — nem vira retry corretivo. */
+    @Test
+    void yesWithoutPendingOfferKeepsRenderBlocked() {
+        whenLlmAnswers().thenAnswer(counting(invocation -> "Há 42 pedidos entregues em SP."));
+        chatService.respond("quantos pedidos entregues em SP?", "sessao-1");
+
+        whenLlmAnswers().thenAnswer(counting(invocation -> {
+            assertThat(renderHolder.isRenderAllowed()).isFalse();
+            return "Certo.";
+        }));
+        chatService.respond("sim", "sessao-1");
+    }
+
+    /** A oferta vale uma vez: aceita, some. */
+    @Test
+    void visualOfferIsConsumedByTheAcceptance() {
+        whenLlmAnswers().thenAnswer(counting(invocation -> "Posso mostrar isso em gráfico, se quiser."));
+        chatService.respond("qual a taxa de falha por estado?", "sessao-1");
+
+        whenLlmAnswers().thenAnswer(counting(invocation -> {
+            renderHolder.set(CHART);
+            return "Aqui está o gráfico.";
+        }));
+        chatService.respond("sim", "sessao-1");
+
+        whenLlmAnswers().thenAnswer(counting(invocation -> {
+            assertThat(renderHolder.isRenderAllowed()).isFalse();
+            return "Há 42 pedidos.";
+        }));
+        chatService.respond("sim", "sessao-1");
+    }
 }

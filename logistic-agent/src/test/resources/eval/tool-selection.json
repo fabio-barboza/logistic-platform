@@ -523,5 +523,27 @@
       "Goiânia"
     ],
     "maxCalls": 4
+  },
+  {
+    "id": "failure-rate-no-unrequested-render",
+    "question": "qual a taxa de falha de entrega por estado?",
+    "expectAnyOf": [
+      "executeQuery"
+    ],
+    "render": "none",
+    "maxCalls": 3
+  },
+  {
+    "id": "chart-only-no-table-duplicate",
+    "question": "faça um gráfico da taxa de falha de entrega por estado",
+    "expectAnyOf": [
+      "executeQuery"
+    ],
+    "render": "chart",
+    "forbidText": [
+      "---|",
+      "| ---"
+    ],
+    "maxCalls": 3
   }
 ]

@@ -13,6 +13,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 @Service
@@ -26,6 +28,38 @@ public class ChatService {
      */
     private static final Pattern VISUAL_CLAIM = Pattern.compile(
             "gr[áa]fico|chart|tabela|pizza|rosca|donut|doughnut", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * O usuário pediu uma visualização? Só então renderChart/renderTable podem desenhar (a tool
+     * checa RenderHolder.isRenderAllowed). Sem isso o modelo desenhava gráfico por conta própria em
+     * pergunta analítica ("qual a taxa de falha por estado?") e ainda repetia os dados em markdown.
+     * Texto é o padrão; o prompt manda oferecer a visualização em vez de impor.
+     */
+    private static final Pattern VISUAL_REQUEST = Pattern.compile(
+            "gr[áa]fic|chart|tabela|tabular|pizza|rosca|donut|doughnut|barras|linhas|"
+                    + "visuali|plot|desenh|diagrama|listagem formatada",
+            Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Linha de tabela markdown. Quando a resposta já tem render, o modelo ainda repetia os mesmos
+     * dados em markdown — a tela mostrava tabela e gráfico para uma pergunta que não pediu nenhum
+     * dos dois. O prompt proíbe a duplicação; isto garante.
+     */
+    /**
+     * Aceite curto ("sim", "pode mandar", "quero"). Vale só quando a resposta anterior ofereceu a
+     * visualização — o "sim" não tem palavra nenhuma de gráfico, e sem isto ele caía no caminho de
+     * render bloqueado logo depois de o próprio agente ter oferecido o gráfico.
+     */
+    private static final Pattern AFFIRMATIVE = Pattern.compile(
+            "^\\W*(sim|s|claro|ok|okay|isso|pode|podes|quero|manda|mandar|bora|beleza|blz|vai|"
+                    + "aceito|mostra|mostre|faz|faça|por favor|pf)\\b",
+            Pattern.CASE_INSENSITIVE);
+
+    /** Teto do mapa de ofertas pendentes: sessão é efêmera (novo id por load da página). */
+    private static final int MAX_PENDING_OFFERS = 500;
+
+    private static final Pattern MARKDOWN_TABLE = Pattern.compile(
+            "(?m)^[ \\t]*\\|.*\\|[ \\t]*$(\\R|$)");
 
     /**
      * Instruções de correção, aplicadas em ordem. Duas tentativas porque a primeira, mais branda,
@@ -46,6 +80,9 @@ public class ChatService {
             renderizar, diga isso claramente e não prometa gráfico nem tabela.
             """);
 
+    /** Sessões em que a última resposta ofereceu uma visualização e o usuário ainda não respondeu. */
+    private final Map<String, Boolean> pendingVisualOffer = new ConcurrentHashMap<>();
+
     private final ChatClient chatClient;
     private final RenderHolder renderHolder;
     private final ObjectProvider<Tracer> tracerProvider;
@@ -60,10 +97,14 @@ public class ChatService {
         Span span = currentSpan();
         tagRequest(span, userMessage, sessionId);
 
+        boolean renderAllowed = renderAllowed(userMessage, sessionId);
+        renderHolder.setRenderAllowed(renderAllowed);
+
         String content = ask(userMessage, sessionId);
 
         for (String correction : RENDER_CORRECTIONS) {
-            if (renderHolder.get() != null || !VISUAL_CLAIM.matcher(nullToEmpty(content)).find()) {
+            if (!renderAllowed || renderHolder.get() != null
+                    || !VISUAL_CLAIM.matcher(nullToEmpty(content)).find()) {
                 break;
             }
             log.info("Resposta anuncia visualização sem render; refazendo com correção. sessionId={}", sessionId);
@@ -73,7 +114,39 @@ public class ChatService {
         tag(span, "langfuse.trace.output", content);
 
         RenderableContent renderData = renderHolder.get();
-        return new ChatMessageDTO("assistant", withRenderFailureNotice(content, renderData), renderData);
+        rememberVisualOffer(sessionId, content, renderData);
+        return new ChatMessageDTO("assistant",
+                withRenderFailureNotice(withoutDuplicatedTable(content, renderData), renderData), renderData);
+    }
+
+    /**
+     * Render liberado quando o usuário pede a visualização, ou quando aceita a oferta feita na
+     * resposta anterior ("sim"). A oferta é consumida no mesmo ato: um "sim" só vale uma vez.
+     */
+    private boolean renderAllowed(String userMessage, String sessionId) {
+        String message = nullToEmpty(userMessage);
+        if (VISUAL_REQUEST.matcher(message).find()) {
+            pendingVisualOffer.remove(sessionId);
+            return true;
+        }
+        boolean accepted = pendingVisualOffer.remove(sessionId) != null
+                && AFFIRMATIVE.matcher(message.strip()).find();
+        if (accepted) {
+            log.info("Render liberado: usuário aceitou a oferta de visualização. sessionId={}", sessionId);
+        }
+        return accepted;
+    }
+
+    /** Guarda que esta resposta ofereceu gráfico/tabela sem desenhar, para o "sim" seguinte valer. */
+    private void rememberVisualOffer(String sessionId, String content, RenderableContent renderData) {
+        if (renderData == null && VISUAL_CLAIM.matcher(nullToEmpty(content)).find()) {
+            if (pendingVisualOffer.size() >= MAX_PENDING_OFFERS) {
+                pendingVisualOffer.clear();
+            }
+            pendingVisualOffer.put(sessionId, Boolean.TRUE);
+        } else {
+            pendingVisualOffer.remove(sessionId);
+        }
     }
 
     private String ask(String userMessage, String sessionId) {
@@ -82,6 +155,18 @@ public class ChatService {
                 .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
                 .call()
                 .content();
+    }
+
+    /** Com render na resposta, a mesma tabela em markdown no texto é só ruído: sai. */
+    private String withoutDuplicatedTable(String content, RenderableContent renderData) {
+        if (renderData == null || content == null) {
+            return content;
+        }
+        String stripped = MARKDOWN_TABLE.matcher(content).replaceAll("").replaceAll("\\R{3,}", "\n\n").strip();
+        if (!stripped.equals(content.strip())) {
+            log.info("Tabela markdown removida do texto: a resposta já tem render");
+        }
+        return stripped;
     }
 
     private String nullToEmpty(String value) {

@@ -11,6 +11,30 @@ public class RenderHolder {
     private RenderableContent content;
     private String lastError;
     private int rejections;
+    private boolean renderAllowed = true;
+
+    /**
+     * O usuário pediu gráfico/tabela nesta requisição? Quem decide é o ChatService, a partir da
+     * mensagem — a tool não vê a pergunta. Com false, renderChart/renderTable recusam: o modelo
+     * desenhava um gráfico por conta própria em pergunta analítica ("taxa de falha por estado") e
+     * ainda repetia os dados em markdown, enchendo a tela com o que ninguém pediu.
+     */
+    public void setRenderAllowed(boolean renderAllowed) {
+        this.renderAllowed = renderAllowed;
+    }
+
+    public boolean isRenderAllowed() {
+        return renderAllowed;
+    }
+
+    /**
+     * Recusa que não é culpa dos argumentos (render não pedido, ou segunda visualização na mesma
+     * resposta). Conta para o teto de recusas — senão o modelo determinístico repete a chamada em
+     * loop — mas não vira aviso de falha na tela: não há nada a desmentir.
+     */
+    public int registerIgnored() {
+        return ++this.rejections;
+    }
 
     public void set(RenderableContent content) {
         this.content = content;

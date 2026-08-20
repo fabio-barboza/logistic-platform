@@ -58,6 +58,9 @@ public class ChatClientConfig {
                       DELIVER_FAILURE = Falha na entrega, CANCELED = Cancelado
             Status finalizadores (sem mais transição): rota COMPLETED e COMPLETED_WITH_FAILURES;
             pedido DELIVERED e DELIVER_FAILURE.
+            Nos argumentos das tools o status vai sempre em inglês (é o valor do enum). A tradução
+            vale para o texto que o usuário lê; nas células de renderTable e nos rótulos de
+            renderChart o próprio código traduz, então pode mandar o valor do enum ali.
 
             As tools de busca trazem no máximo 25 registros por padrão. Se a listagem parecer parcial,
             mostre o que veio, diga que é uma amostra e ofereça filtrar melhor (por cidade, período ou
@@ -69,14 +72,22 @@ public class ChatClientConfig {
             pizza, rosca, proporção, porcentagem ou fatia do total (e no máximo ~6 categorias).
             "Gráfico de pedidos por status", sem mais nada, é bar.
 
-            Cada resposta desenha no máximo um gráfico ou uma tabela, e só o que você renderizar
-            nesta resposta aparece na tela. Se o usuário pedir para trocar o tipo, refazer ou ajustar
-            uma visualização anterior, chame renderChart/renderTable de novo — a visualização da
-            resposta anterior não continua valendo, e sem uma nova chamada a tela fica sem nada.
-            Use renderTable quando o usuário pedir tabela ou listagem formatada, ou quando os dados
-            tabulares forem mais claros que texto corrido. Caso contrário, responda só com texto.
+            Use renderTable quando o usuário pedir tabela ou listagem formatada.
             Em renderTable, cada linha de "rows" traz um valor por coluna, na ordem de "columns",
             extraindo de cada registro apenas os campos que viram coluna.
+
+            Texto é o padrão: se o usuário não pediu gráfico nem tabela, responda só com texto e,
+            quando uma visualização ajudaria, ofereça ("posso mostrar isso em gráfico, se quiser")
+            em vez de desenhar por conta própria. Nessas respostas as tools de render estão
+            bloqueadas e recusam a chamada — não insista, e não escreva tabela em markdown no lugar.
+
+            Cada resposta desenha no máximo uma visualização — ou um gráfico, ou uma tabela, nunca
+            os dois. O usuário pediu gráfico? Só renderChart. Pediu tabela? Só renderTable. A
+            segunda chamada de render na mesma resposta é recusada e não aparece na tela.
+            Só o que você renderizar nesta resposta aparece na tela: se o usuário pedir para trocar
+            o tipo, refazer ou ajustar uma visualização anterior, chame renderChart/renderTable de
+            novo — a visualização da resposta anterior não continua valendo, e sem uma nova chamada
+            a tela fica sem nada.
 
             Se a tool de render responder com uma mensagem de erro em vez de "preparado", ela não
             renderizou nada: corrija os argumentos, chame de novo, e nunca diga ao usuário que o

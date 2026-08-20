@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -33,6 +34,23 @@ public class RenderTool {
      */
     private static final int MAX_REJECTIONS = 2;
 
+    /**
+     * Status em PT-BR para o que vai desenhado na tela. O system prompt manda traduzir, mas o modelo
+     * traduz o texto da resposta e copia o enum cru para as células da tabela e os rótulos do
+     * gráfico — a tela mostrava "DELIVERED" ao lado de "Entregue" na mesma resposta. Tradução de
+     * enum é determinística, então é código, não instrução. Mantenha em sincronia com o system
+     * prompt e com V1__init.sql.
+     */
+    private static final Map<String, String> STATUS_PT = Map.ofEntries(
+            Map.entry("IN_PROGRESS", "Em andamento"),
+            Map.entry("COMPLETED", "Concluído"),
+            Map.entry("COMPLETED_WITH_FAILURES", "Concluído com falhas"),
+            Map.entry("CANCELED", "Cancelado"),
+            Map.entry("IN_ROUTE", "Em rota"),
+            Map.entry("COLLECTED", "Coletado"),
+            Map.entry("DELIVERED", "Entregue"),
+            Map.entry("DELIVER_FAILURE", "Falha na entrega"));
+
     private final RenderHolder renderHolder;
 
     public RenderTool(RenderHolder renderHolder) {
@@ -41,7 +59,9 @@ public class RenderTool {
 
     @Tool(description = """
             Use esta tool para renderizar dados como um gráfico no frontend.
-            Chame-a quando o usuário pedir um gráfico, chart ou visualização gráfica de dados numéricos.
+            Chame-a apenas quando o usuário pedir um gráfico, chart ou visualização gráfica de dados
+            numéricos. Cada resposta desenha no máximo uma visualização: se já chamou renderTable
+            nesta resposta, não chame esta.
             Escolha o chartType mais adequado para os dados:
               - bar: comparação entre categorias
               - line: evolução ao longo do tempo ou sequência
@@ -54,6 +74,10 @@ public class RenderTool {
             @ToolParam(description = "Rótulos do eixo X ou categorias, ex: [\"SP\",\"RJ\",\"MG\"]") List<String> labels,
             @ToolParam(description = "Datasets, ex: [{\"label\":\"Entregas\",\"data\":[42,30,25]}]") List<Dataset> datasets
     ) {
+        String refusal = policyRefusal("renderChart", "gráfico");
+        if (refusal != null) {
+            return refusal;
+        }
         if (!VALID_CHART_TYPES.contains(chartType)) {
             return reject("chartType inválido: '" + chartType + "'. Use bar, line, pie ou doughnut.");
         }
@@ -76,7 +100,7 @@ public class RenderTool {
                 return renderTruncated(title, chartType, labels, datasets, problem);
             }
         }
-        renderHolder.set(new ChartContent(title, chartType, labels, datasets));
+        renderHolder.set(new ChartContent(title, chartType, translateAll(labels), datasets));
         log.info("Gráfico preparado: type={}, labels={}", chartType, labels.size());
         // O aviso final existe porque o modelo, ao ser pedido para trocar o tipo do gráfico,
         // respondia "aqui está em barras" sem chamar a tool de novo — e a tela ficava sem gráfico.
@@ -86,8 +110,10 @@ public class RenderTool {
 
     @Tool(description = """
             Use esta tool para renderizar dados como uma tabela formatada no frontend.
-            Chame-a quando o usuário pedir explicitamente uma tabela, listagem formatada
-            ou quando os dados tabulares forem mais claros que texto corrido.
+            Chame-a apenas quando o usuário pedir explicitamente uma tabela ou uma listagem
+            formatada. Pergunta respondida por um número ou por poucas linhas de texto não
+            precisa de tabela. Cada resposta desenha no máximo uma visualização: se já chamou
+            renderChart nesta resposta, não chame esta.
             """)
     public String renderTable(
             @ToolParam(description = "Título da tabela") String title,
@@ -95,6 +121,10 @@ public class RenderTool {
             @ToolParam(description = "Uma linha por registro, cada uma com um valor por coluna na ordem de "
                     + "columns. Ex: [[\"SP\",\"42\",\"DELIVERED\"],[\"RJ\",\"30\",\"IN_ROUTE\"]]") List<List<String>> rows
     ) {
+        String refusal = policyRefusal("renderTable", "tabela");
+        if (refusal != null) {
+            return refusal;
+        }
         if (columns == null || columns.isEmpty()) {
             return reject("columns está vazio. Envie os nomes das colunas, ex: [\"Estado\",\"Entregas\"].");
         }
@@ -112,17 +142,59 @@ public class RenderTool {
                 return renderAdjusted(title, columns, rows, problem);
             }
         }
-        renderHolder.set(new TableContent(title, columns, rows));
+        renderHolder.set(new TableContent(title, columns, translateRows(rows)));
         log.info("Tabela preparada: {} colunas, {} linhas", columns.size(), rows.size());
         return "Tabela preparada para renderização no frontend. Vale só para esta resposta: "
                 + "para trocar as colunas ou os dados, chame renderTable de novo.";
     }
 
     /**
-     * Registra a crítica no holder e devolve a mesma mensagem ao modelo. O holder guarda o erro
-     * porque o modelo às vezes ignora a crítica e anuncia o gráfico mesmo assim — aí é o
-     * ChatService que desmente a resposta.
+     * Recusas de política — render não pedido, ou segunda visualização na mesma resposta. Devolve a
+     * crítica para o modelo, ou null quando ele já insistiu demais e a chamada deve passar.
+     *
+     * <p>Ceder no teto não é detalhe: recusa que só repete a crítica não encerra o loop de tool calls
+     * do Spring AI (que não tem limite de rodadas), e o modelo determinístico reenvia a MESMA chamada
+     * — uma pergunta real rodou 182 recusas idênticas até travar. Só um retorno de sucesso encerra.
+     * Quem insiste até o teto costuma ter razão: é o usuário que respondeu "sim" à oferta de gráfico
+     * numa mensagem que o ChatService não reconheceu como pedido.
      */
+    private String policyRefusal(String tool, String tipo) {
+        if (!renderHolder.isRenderAllowed()) {
+            if (yielding(tool)) {
+                return null;
+            }
+            return ignore(tool, "O usuário não pediu " + tipo + " nesta pergunta, então a chamada foi "
+                    + "ignorada e nada será desenhado na tela. Responda em texto e, se achar útil, "
+                    + "ofereça a visualização (ex.: \"posso mostrar isso em gráfico, se quiser\"). "
+                    + "Se o usuário já tinha pedido, chame de novo que a visualização passa.");
+        }
+        if (renderHolder.get() != null) {
+            if (yielding(tool)) {
+                return null;
+            }
+            return ignore(tool, "Esta resposta já tem uma visualização preparada e cada resposta desenha "
+                    + "no máximo uma. A chamada foi ignorada: vale a visualização já preparada. Não chame "
+                    + tool + " de novo agora — responda em texto, sem anunciar uma segunda visualização.");
+        }
+        return null;
+    }
+
+    /** Insistiu até o teto? Então a chamada passa — é o que encerra o loop. */
+    private boolean yielding(String tool) {
+        if (renderHolder.rejections() + 1 < MAX_REJECTIONS) {
+            return false;
+        }
+        renderHolder.registerIgnored();
+        log.warn("{} aceita por insistência após {} recusas de política", tool, MAX_REJECTIONS);
+        return true;
+    }
+
+    private String ignore(String tool, String message) {
+        int rejections = renderHolder.registerIgnored();
+        log.info("{} ignorada ({}/{}): {}", tool, rejections, MAX_REJECTIONS, message);
+        return message;
+    }
+
     /** Já gastou as tentativas de correção desta requisição? Então nada de pedir outra. */
     private boolean lastChance() {
         return renderHolder.rejections() + 1 >= MAX_REJECTIONS;
@@ -147,7 +219,7 @@ public class RenderTool {
         List<Dataset> trimmed = datasets.stream()
                 .map(dataset -> new Dataset(dataset.label(), dataset.data().subList(0, cut)))
                 .toList();
-        renderHolder.set(new ChartContent(title, chartType, labels.subList(0, cut), trimmed));
+        renderHolder.set(new ChartContent(title, chartType, translateAll(labels.subList(0, cut)), trimmed));
         log.warn("Gráfico truncado após {} recusas: {} categorias de {}", MAX_REJECTIONS, cut, labels.size());
         return problem + " Depois de " + MAX_REJECTIONS + " tentativas, o gráfico foi desenhado com as "
                 + cut + " primeiras categorias. Não chame renderChart de novo nesta resposta: diga ao "
@@ -166,12 +238,33 @@ public class RenderTool {
             }
             return List.copyOf(values.subList(0, columns.size()));
         }).toList();
-        renderHolder.set(new TableContent(title, columns, adjusted));
+        renderHolder.set(new TableContent(title, columns, translateRows(adjusted)));
         log.warn("Tabela ajustada após {} recusas: {} linhas normalizadas para {} colunas",
                 MAX_REJECTIONS, adjusted.size(), columns.size());
         return problem + " Depois de " + MAX_REJECTIONS + " tentativas, a tabela foi desenhada com as "
                 + "linhas ajustadas ao número de colunas. Não chame renderTable de novo nesta resposta: "
                 + "diga ao usuário que a tabela saiu ajustada por inconsistência nos dados.";
+    }
+
+    /**
+     * Registra a crítica no holder e devolve a mesma mensagem ao modelo. O holder guarda o erro
+     * porque o modelo às vezes ignora a crítica e anuncia o gráfico mesmo assim — aí é o
+     * ChatService que desmente a resposta.
+     */
+    private List<List<String>> translateRows(List<List<String>> rows) {
+        return rows.stream().map(this::translateAll).toList();
+    }
+
+    private List<String> translateAll(List<String> values) {
+        return values.stream().map(this::translateStatus).toList();
+    }
+
+    /** Só troca a célula que é exatamente um status; o resto passa intacto. */
+    private String translateStatus(String value) {
+        if (value == null) {
+            return null;
+        }
+        return STATUS_PT.getOrDefault(value.strip().toUpperCase(), value);
     }
 
     private String reject(String message) {
