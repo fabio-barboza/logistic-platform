@@ -24,7 +24,9 @@ public class SchemaMcpTools {
 
                 driver (id UUID, name VARCHAR, email VARCHAR único, birthday DATE, city VARCHAR,
                         state CHAR(2), created_at, updated_at)
-                  Motoristas cadastrados.
+                  Motoristas cadastrados. ATENÇÃO: name NÃO é único — existem motoristas homônimos,
+                  pessoas diferentes, em estados diferentes. A identidade é o id (email também é
+                  único). Filtrar por name soma homônimos e infla o resultado.
 
                 driver_vehicle (id UUID, driver_id UUID -> driver.id, vehicle_id UUID -> vehicle.id,
                                 created_at)
@@ -64,6 +66,21 @@ public class SchemaMcpTools {
                 driver 1---N route
                 route 1---N "order" (route_id pode ser NULL: pedido ainda não alocado)
                 driver N---N vehicle (via driver_vehicle)
+
+                REGRAS AO CONSULTAR
+                --------------------
+                1. Motorista se identifica por id, nunca por nome. Para perguntar sobre um motorista
+                   específico, obtenha o id com searchDrivers e filtre por d.id. Se mais de um
+                   motorista casar com o nome, use o recorte da própria conversa (estado, cidade)
+                   para escolher; se ainda houver empate, pergunte ao usuário de qual se trata,
+                   mostrando cidade e estado de cada um. Nunca escolha por conta própria nem some
+                   os homônimos.
+                2. Ao agregar por motorista, use GROUP BY d.id, d.name (nunca só d.name) e traga
+                   d.id no SELECT — assim a pergunta seguinte sobre "esse motorista" tem a chave.
+                3. Falha de entrega é order.status = 'DELIVER_FAILURE'. Não combine com filtro de
+                   route.status: são dimensões independentes, e pedidos com falha existem também em
+                   rotas COMPLETED e CANCELED. Só filtre route.status quando a pergunta for sobre o
+                   status da rota.
                 """;
     }
 }

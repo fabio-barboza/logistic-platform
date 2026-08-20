@@ -9,6 +9,7 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
@@ -22,6 +23,15 @@ public class RenderTool {
 
     private static final Logger log = LoggerFactory.getLogger(RenderTool.class);
     private static final Set<String> VALID_CHART_TYPES = Set.of("bar", "line", "pie", "doughnut");
+
+    /**
+     * Teto de recusas por requisição. A crítica devolvida como retorno de tool é o que faz o modelo
+     * se corrigir, mas com temperatura baixa ele reenvia a MESMA chamada e a crítica vira um loop:
+     * o loop de tool calls do Spring AI não tem limite de rodadas, e uma requisição já rodou 172
+     * recusas idênticas em 26 minutos até estourar o contexto. Passado o teto, a tool para de pedir
+     * correção e manda o modelo desistir do render nesta resposta.
+     */
+    private static final int MAX_REJECTIONS = 2;
 
     private final RenderHolder renderHolder;
 
@@ -58,9 +68,12 @@ public class RenderTool {
                 return reject("O dataset '" + dataset.label() + "' está sem data. Envie um número por rótulo de labels.");
             }
             if (dataset.data().size() != labels.size()) {
-                return reject("O dataset '" + dataset.label() + "' tem " + dataset.data().size()
-                        + " valores, mas labels tem " + labels.size() + " rótulos. "
-                        + "Reenvie com um valor para cada rótulo, sem omitir categorias.");
+                String problem = "O dataset '" + dataset.label() + "' tem " + dataset.data().size()
+                        + " valores, mas labels tem " + labels.size() + " rótulos.";
+                if (!lastChance()) {
+                    return reject(problem + " Reenvie com um valor para cada rótulo, sem omitir categorias.");
+                }
+                return renderTruncated(title, chartType, labels, datasets, problem);
             }
         }
         renderHolder.set(new ChartContent(title, chartType, labels, datasets));
@@ -91,9 +104,12 @@ public class RenderTool {
         for (int i = 0; i < rows.size(); i++) {
             List<String> row = rows.get(i);
             if (row == null || row.size() != columns.size()) {
-                return reject("A linha " + (i + 1) + " tem " + (row == null ? 0 : row.size())
-                        + " valores, mas columns tem " + columns.size() + " colunas. "
-                        + "Reenvie com um valor por coluna, na ordem de columns.");
+                String problem = "A linha " + (i + 1) + " tem " + (row == null ? 0 : row.size())
+                        + " valores, mas columns tem " + columns.size() + " colunas.";
+                if (!lastChance()) {
+                    return reject(problem + " Reenvie com um valor por coluna, na ordem de columns.");
+                }
+                return renderAdjusted(title, columns, rows, problem);
             }
         }
         renderHolder.set(new TableContent(title, columns, rows));
@@ -107,9 +123,65 @@ public class RenderTool {
      * porque o modelo às vezes ignora a crítica e anuncia o gráfico mesmo assim — aí é o
      * ChatService que desmente a resposta.
      */
+    /** Já gastou as tentativas de correção desta requisição? Então nada de pedir outra. */
+    private boolean lastChance() {
+        return renderHolder.rejections() + 1 >= MAX_REJECTIONS;
+    }
+
+    /**
+     * Render de último recurso quando labels e data não batem: casa os dois pelo menor tamanho e
+     * desenha. Perde as categorias sobrando, mas encerra o loop — e a mensagem manda o modelo
+     * avisar o usuário de que o gráfico saiu parcial.
+     */
+    private String renderTruncated(String title, String chartType, List<String> labels,
+            List<Dataset> datasets, String problem) {
+        int size = datasets.stream()
+                .mapToInt(dataset -> dataset.data() == null ? 0 : dataset.data().size())
+                .min()
+                .orElse(0);
+        size = Math.min(size, labels.size());
+        if (size == 0) {
+            return reject(problem + " Não há valores para desenhar. Responda ao usuário sem prometer gráfico.");
+        }
+        int cut = size;
+        List<Dataset> trimmed = datasets.stream()
+                .map(dataset -> new Dataset(dataset.label(), dataset.data().subList(0, cut)))
+                .toList();
+        renderHolder.set(new ChartContent(title, chartType, labels.subList(0, cut), trimmed));
+        log.warn("Gráfico truncado após {} recusas: {} categorias de {}", MAX_REJECTIONS, cut, labels.size());
+        return problem + " Depois de " + MAX_REJECTIONS + " tentativas, o gráfico foi desenhado com as "
+                + cut + " primeiras categorias. Não chame renderChart de novo nesta resposta: diga ao "
+                + "usuário que a visualização saiu parcial por inconsistência nos dados.";
+    }
+
+    /**
+     * Mesma ideia da renderTruncated, para tabela: cada linha é cortada ou completada com "-" até
+     * ter um valor por coluna.
+     */
+    private String renderAdjusted(String title, List<String> columns, List<List<String>> rows, String problem) {
+        List<List<String>> adjusted = rows.stream().map(row -> {
+            List<String> values = new ArrayList<>(row == null ? List.of() : row);
+            while (values.size() < columns.size()) {
+                values.add("-");
+            }
+            return List.copyOf(values.subList(0, columns.size()));
+        }).toList();
+        renderHolder.set(new TableContent(title, columns, adjusted));
+        log.warn("Tabela ajustada após {} recusas: {} linhas normalizadas para {} colunas",
+                MAX_REJECTIONS, adjusted.size(), columns.size());
+        return problem + " Depois de " + MAX_REJECTIONS + " tentativas, a tabela foi desenhada com as "
+                + "linhas ajustadas ao número de colunas. Não chame renderTable de novo nesta resposta: "
+                + "diga ao usuário que a tabela saiu ajustada por inconsistência nos dados.";
+    }
+
     private String reject(String message) {
-        log.info("Render rejeitado: {}", message);
-        renderHolder.setError(message);
+        int rejections = renderHolder.registerRejection(message);
+        log.info("Render rejeitado ({}/{}): {}", rejections, MAX_REJECTIONS, message);
+        if (rejections >= MAX_REJECTIONS) {
+            return message + " Esta foi a última tentativa de render desta resposta: não chame "
+                    + "renderChart nem renderTable de novo agora. Responda ao usuário que não foi "
+                    + "possível montar a visualização com esses dados, sem prometer gráfico ou tabela.";
+        }
         return message;
     }
 }

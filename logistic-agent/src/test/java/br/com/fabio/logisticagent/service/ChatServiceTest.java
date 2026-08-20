@@ -75,20 +75,36 @@ class ChatServiceTest {
     }
 
     @Test
-    void claimWithoutRenderTwiceKeepsLastAnswerAndNoRenderData() {
+    void secondCorrectionRunsWhenFirstRetryStillDoesNotRender() {
+        whenLlmAnswers()
+                .thenAnswer(counting(invocation -> CLAIM))
+                .thenAnswer(counting(invocation -> CLAIM))
+                .thenAnswer(counting(invocation -> {
+                    renderHolder.set(CHART);
+                    return "Aqui está o gráfico.";
+                }));
+
+        ChatMessageDTO response = chatService.respond("gere um gráfico de pizza", "sessao-1");
+
+        assertThat(response.renderData()).isEqualTo(CHART);
+        assertThat(llmCalls).hasValue(3);
+    }
+
+    @Test
+    void claimWithoutRenderStopsAfterTwoCorrections() {
         whenLlmAnswers().thenAnswer(counting(invocation -> CLAIM));
 
         ChatMessageDTO response = chatService.respond("gere um gráfico de pizza", "sessao-1");
 
         assertThat(response.renderData()).isNull();
         assertThat(response.content()).isEqualTo(CLAIM);
-        assertThat(llmCalls).hasValue(2);
+        assertThat(llmCalls).hasValue(3);
     }
 
     @Test
     void rejectedRenderAppendsNoticeToContent() {
         whenLlmAnswers().thenAnswer(counting(invocation -> {
-            renderHolder.setError("O dataset 'Falhas' tem 4 valores, mas labels tem 25 rótulos.");
+            renderHolder.registerRejection("O dataset 'Falhas' tem 4 valores, mas labels tem 25 rótulos.");
             return CLAIM;
         }));
 

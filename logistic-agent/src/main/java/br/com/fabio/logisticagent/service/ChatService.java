@@ -12,6 +12,7 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.regex.Pattern;
 
 @Service
@@ -26,13 +27,24 @@ public class ChatService {
     private static final Pattern VISUAL_CLAIM = Pattern.compile(
             "gr[áa]fico|chart|tabela|pizza|rosca|donut|doughnut", Pattern.CASE_INSENSITIVE);
 
-    private static final String RENDER_CORRECTION = """
+    /**
+     * Instruções de correção, aplicadas em ordem. Duas tentativas porque a primeira, mais branda,
+     * recupera a maior parte dos casos, e ainda sobram respostas em que o modelo repete a promessa
+     * sem chamar tool nenhuma.
+     */
+    private static final List<String> RENDER_CORRECTIONS = List.of("""
             Sua resposta anterior anunciou um gráfico ou tabela, mas você não chamou renderChart nem
             renderTable — a tela do usuário ficou vazia. Refaça agora: busque os dados via tool (nunca
             use dados de memória ou inventados), chame renderChart/renderTable com esses dados e
             responda com um texto curto. Se não for o caso de renderizar nada, responda sem prometer
             gráfico ou tabela.
-            """;
+            """, """
+            Você continua sem chamar a tool de render, e a tela do usuário segue vazia. Listar os
+            dados em texto ou markdown não desenha nada. Nesta resposta, faça exatamente isto:
+            chame renderChart (gráfico) ou renderTable (tabela) com os dados obtidos por tool e
+            escreva no máximo uma frase depois disso, sem repetir os dados. Se não houver dados para
+            renderizar, diga isso claramente e não prometa gráfico nem tabela.
+            """);
 
     private final ChatClient chatClient;
     private final RenderHolder renderHolder;
@@ -50,9 +62,12 @@ public class ChatService {
 
         String content = ask(userMessage, sessionId);
 
-        if (renderHolder.get() == null && VISUAL_CLAIM.matcher(nullToEmpty(content)).find()) {
+        for (String correction : RENDER_CORRECTIONS) {
+            if (renderHolder.get() != null || !VISUAL_CLAIM.matcher(nullToEmpty(content)).find()) {
+                break;
+            }
             log.info("Resposta anuncia visualização sem render; refazendo com correção. sessionId={}", sessionId);
-            content = ask(RENDER_CORRECTION, sessionId);
+            content = ask(correction, sessionId);
         }
 
         tag(span, "langfuse.trace.output", content);

@@ -10,10 +10,12 @@ public class RenderHolder {
 
     private RenderableContent content;
     private String lastError;
+    private int rejections;
 
     public void set(RenderableContent content) {
         this.content = content;
         this.lastError = null;
+        this.rejections = 0;
     }
 
     public RenderableContent get() {
@@ -25,8 +27,13 @@ public class RenderHolder {
      * mensagem como retorno da tool e deveria corrigir e chamar de novo — quando não corrige,
      * é isso que o ChatService usa para não deixar a resposta afirmar um gráfico que não existe.
      */
-    public void setError(String lastError) {
+    public int registerRejection(String lastError) {
         this.lastError = lastError;
+        return ++this.rejections;
+    }
+
+    public int rejections() {
+        return rejections;
     }
 
     public String getError() {

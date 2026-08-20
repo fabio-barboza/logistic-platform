@@ -28,13 +28,21 @@ public class QueryMcpTools {
             Regras: só um comando SELECT (ou WITH ... SELECT) por chamada; não use ';'; se não
             informar LIMIT, o resultado é limitado a 500 linhas automaticamente.
 
-            Exemplo 1 — motoristas de SP com mais falhas de entrega em rotas concluídas:
-            SELECT d.name, COUNT(*) AS falhas
+            Motoristas: driver.name NÃO é único (há homônimos). Agrupe sempre por d.id junto com
+            d.name, e para falar de um motorista específico filtre por d.id — nunca por d.name, que
+            soma pessoas diferentes. O id vem de searchDrivers ou da própria query anterior.
+
+            Falha de entrega é o.status = 'DELIVER_FAILURE', só isso. Não filtre r.status junto: o
+            status da rota é outra dimensão, e um pedido com falha aparece também em rota COMPLETED
+            ou CANCELED — filtrar por rota subconta sem avisar.
+
+            Exemplo 1 — motoristas de SP com mais falhas de entrega:
+            SELECT d.id, d.name, COUNT(*) AS falhas
             FROM driver d
             JOIN route r ON r.driver_id = d.id
             JOIN "order" o ON o.route_id = r.id
-            WHERE d.state = 'SP' AND r.status = 'COMPLETED_WITH_FAILURES' AND o.status = 'DELIVER_FAILURE'
-            GROUP BY d.name
+            WHERE d.state = 'SP' AND o.status = 'DELIVER_FAILURE'
+            GROUP BY d.id, d.name
             ORDER BY falhas DESC
             LIMIT 10
 
@@ -48,7 +56,18 @@ public class QueryMcpTools {
             WHERE o.status = 'DELIVERED'
             GROUP BY v.name
 
-            Exemplo 3 — pedidos criados nos últimos 30 dias por bairro:
+            Exemplo 3 — cidades com falha de entrega de UM motorista, quando o usuário cita o nome
+            ("as cidades onde a Juliana teve problemas"). Nome não é chave: pegue antes o id com
+            searchDrivers e filtre por ele. Filtrar por d.name somaria motoristas homônimos de
+            outros estados:
+            SELECT o.city, COUNT(*) AS falhas
+            FROM route r
+            JOIN "order" o ON o.route_id = r.id
+            WHERE r.driver_id = '<id vindo de searchDrivers, nunca este literal>' AND o.status = 'DELIVER_FAILURE'
+            GROUP BY o.city
+            ORDER BY falhas DESC
+
+            Exemplo 4 — pedidos criados nos últimos 30 dias por bairro:
             SELECT neighborhood, COUNT(*) FROM "order"
             WHERE created_at >= NOW() - INTERVAL '30 days'
             GROUP BY neighborhood

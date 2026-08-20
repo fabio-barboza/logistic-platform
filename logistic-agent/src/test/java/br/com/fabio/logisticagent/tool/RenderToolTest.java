@@ -126,4 +126,42 @@ class RenderToolTest {
         assertThat(renderHolder.get()).isInstanceOf(TableContent.class);
         assertThat(renderHolder.getError()).isNull();
     }
+
+    @Test
+    void secondMismatchRendersTruncatedChartInsteadOfLooping() {
+        List<String> labels = List.of("SP", "RJ", "MG");
+        List<Dataset> datasets = List.of(new Dataset("Pedidos", List.of(1, 2)));
+
+        renderTool.renderChart("Título", "bar", labels, datasets);
+        String result = renderTool.renderChart("Título", "bar", labels, datasets);
+
+        assertThat(result).contains("2 primeiras categorias", "Não chame renderChart de novo");
+        ChartContent chart = (ChartContent) renderHolder.get();
+        assertThat(chart.labels()).containsExactly("SP", "RJ");
+        assertThat(chart.datasets().getFirst().data()).containsExactly(1, 2);
+        assertThat(renderHolder.getError()).isNull();
+    }
+
+    @Test
+    void secondRowMismatchRendersAdjustedTableInsteadOfLooping() {
+        List<String> columns = List.of("Estado", "Pedidos");
+        List<List<String>> rows = List.of(List.of("SP", "42"), List.of("RJ"));
+
+        renderTool.renderTable("Título", columns, rows);
+        String result = renderTool.renderTable("Título", columns, rows);
+
+        assertThat(result).contains("Não chame renderTable de novo");
+        TableContent table = (TableContent) renderHolder.get();
+        assertThat(table.rows()).containsExactly(List.of("SP", "42"), List.of("RJ", "-"));
+    }
+
+    @Test
+    void repeatedUnrenderableArgumentsTellTheModelToGiveUp() {
+        renderTool.renderChart("Título", "bar", List.of("SP"), List.of());
+        String result = renderTool.renderChart("Título", "bar", List.of("SP"), List.of());
+
+        assertThat(result).contains("última tentativa de render");
+        assertThat(renderHolder.get()).isNull();
+        assertThat(renderHolder.getError()).isNotNull();
+    }
 }

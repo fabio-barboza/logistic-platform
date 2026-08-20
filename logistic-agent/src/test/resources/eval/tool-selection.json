@@ -486,5 +486,42 @@
     "render": "chart",
     "chartType": "pie",
     "maxCalls": 3
+  },
+  {
+    "id": "driver-failures-ignore-route-status",
+    "question": "quais os motoristas de SP que mais tiveram falhas de entrega?",
+    "expectAnyOf": [
+      "executeQuery"
+    ],
+    "expectArgs": [
+      "'DELIVER_FAILURE'",
+      "group by d.id"
+    ],
+    "forbidArgs": [
+      "r.status =",
+      "route.status ="
+    ],
+    "maxCalls": 3
+  },
+  {
+    "id": "driver-followup-filters-by-id",
+    "setup": "quais os motoristas de SP que mais tiveram falhas de entrega?",
+    "question": "mostre em um gráfico de pizza as cidades onde a Juliana teve problemas",
+    "expectAnyOf": [
+      "executeQuery"
+    ],
+    "expectArgs": [
+      "d.id = || r.driver_id = || driver_id ="
+    ],
+    "forbidArgs": [
+      "d.name = 'Juliana"
+    ],
+    "render": "chart",
+    "chartType": "pie",
+    "forbidText": [
+      "Salvador",
+      "Goiânia"
+    ],
+    "maxCalls": 4
   }
 ]

@@ -24,6 +24,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -158,8 +159,11 @@ class ToolSelectionEvalTest {
         // em particular, valem os argumentos de tudo que foi chamado
         String arguments = recorder.argumentsOf(expected.isEmpty() ? names : expected);
         evalCase.expectArgsOrEmpty().stream()
-                .filter(fragment -> !arguments.contains(normalizeArgs(fragment)))
+                .filter(fragment -> !containsAnyAlternative(arguments, fragment))
                 .forEach(fragment -> failures.add("argumentos sem " + fragment));
+        evalCase.forbidArgsOrEmpty().stream()
+                .filter(fragment -> arguments.contains(normalizeArgs(fragment)))
+                .forEach(fragment -> failures.add("argumentos com " + fragment + ", que não podia aparecer"));
 
         String expectedRender = evalCase.render();
         String actualRender = renderTypeOf(response.renderData());
@@ -211,6 +215,19 @@ class ToolSelectionEvalTest {
         }
     }
 
+    /**
+     * Um fragmento pode trazer alternativas separadas por "||" — basta uma casar. Existe porque a
+     * mesma coisa se escreve de mais de um jeito em SQL: filtrar o motorista por "d.id =" ou por
+     * "r.driver_id =" é a mesma chave, dos dois lados do join, e cobrar só uma das formas reprova
+     * uma query correta.
+     */
+    private static boolean containsAnyAlternative(String arguments, String fragment) {
+        return Arrays.stream(fragment.split("\\|\\|"))
+                .map(String::trim)
+                .filter(alternative -> !alternative.isEmpty())
+                .anyMatch(alternative -> arguments.contains(normalizeArgs(alternative)));
+    }
+
     private static String normalizeArgs(String fragment) {
         return fragment.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
     }
@@ -225,9 +242,30 @@ class ToolSelectionEvalTest {
 
     private List<EvalCase> loadDataset() throws IOException {
         ObjectMapper mapper = new ObjectMapper();
+        List<EvalCase> cases;
         try (var input = new ClassPathResource("eval/tool-selection.json").getInputStream()) {
-            return mapper.readerForListOf(EvalCase.class).readValue(input);
+            cases = mapper.readerForListOf(EvalCase.class).readValue(input);
         }
+        return filterByIds(cases);
+    }
+
+    /**
+     * Recorte do dataset por id ({@code -Deval.cases=id1,id2}). O dataset inteiro é caro — cada caso
+     * é ao menos uma ida à LLM, em série, e os casos com setup são duas. Ao mexer numa regra
+     * específica, rode só os casos dela; o dataset completo fica para antes de commitar e para o CI.
+     */
+    private List<EvalCase> filterByIds(List<EvalCase> cases) {
+        String selection = System.getProperty("eval.cases", "").trim();
+        if (selection.isEmpty()) {
+            return cases;
+        }
+        List<String> ids = Arrays.stream(selection.split(",")).map(String::trim).filter(id -> !id.isEmpty()).toList();
+        List<EvalCase> selected = cases.stream().filter(evalCase -> ids.contains(evalCase.id())).toList();
+        assertThat(selected)
+                .as("nenhum caso do dataset casa com -Deval.cases=%s (ids disponíveis: %s)",
+                        selection, cases.stream().map(EvalCase::id).toList())
+                .isNotEmpty();
+        return selected;
     }
 
     private double threshold() {

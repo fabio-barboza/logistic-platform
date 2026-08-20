@@ -17,7 +17,10 @@ import java.util.List;
  * @param forbid      o modelo não pode chamar nenhuma destas tools
  * @param expectNoTool nenhuma tool MCP pode ser chamada (saudação, pergunta fora do domínio, pedido recusado)
  * @param expectArgs  trechos que devem aparecer nos argumentos das tools de {@code expectAnyOf}
- *                    (comparação sem espaços e case-insensitive, ex.: {@code "\"state\":\"SP\""})
+ *                    (comparação sem espaços e case-insensitive, ex.: {@code "\"state\":\"SP\""});
+ *                    alternativas equivalentes vão separadas por {@code ||}, e basta uma casar
+ * @param forbidArgs  trechos que não podem aparecer nesses mesmos argumentos (ex.: um filtro que
+ *                    distorce a contagem, como {@code "r.status="} numa pergunta sobre falha de pedido)
  * @param maxCalls    número máximo de chamadas MCP aceitas — pega o modelo que tateia até acertar
  * @param render      render esperado: "chart", "table", "none" ou null (não avaliado)
  * @param chartType   tipo de gráfico esperado quando {@code render} é "chart" (bar, line, pie, doughnut)
@@ -35,6 +38,7 @@ public record EvalCase(
         List<String> forbid,
         Boolean expectNoTool,
         List<String> expectArgs,
+        List<String> forbidArgs,
         Integer maxCalls,
         String render,
         String chartType,
@@ -52,6 +56,10 @@ public record EvalCase(
 
     public List<String> expectArgsOrEmpty() {
         return orEmpty(expectArgs);
+    }
+
+    public List<String> forbidArgsOrEmpty() {
+        return orEmpty(forbidArgs);
     }
 
     public List<String> expectColumnsOrEmpty() {
