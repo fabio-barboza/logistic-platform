@@ -19,12 +19,13 @@ auditar não vai para produção.
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Fabio%20Oliveira-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/fabio-oliveira-20a977a1/)
 [![GitHub](https://img.shields.io/badge/GitHub-fabio--barboza-181717?logo=github&logoColor=white)](https://github.com/fabio-barboza)
 
-> **Obs.: isto é uma aplicação de demonstração.** Autenticação e rate limit ainda não estão
-> implementados: a `logistic-api` não tem login e o MCP server não tem token, então quem alcança a
-> porta 8081 faz o que quiser, e não há controle de quem pediu o quê. As duas fronteiras duras que
-> existem hoje são a role read-only do Postgres, que impede o `executeQuery` de escrever, e o
-> [human in the loop](#human-in-the-loop-aprovação-humana-na-escrita): toda escrita da LLM vira uma
-> pendência que só executa depois do clique do usuário. Rode em `localhost`.
+> **Obs.: isto é uma aplicação de demonstração.** As três aplicações exigem login via Keycloak
+> (OAuth2/OIDC) — veja [Login e usuários](#login-e-usuários) para entrar assim que a stack subir.
+> Rate limit ainda não está implementado. As fronteiras duras que existem hoje são a validação de
+> token nas três aplicações, a role read-only do Postgres, que impede o `executeQuery` de escrever,
+> e o [human in the loop](#human-in-the-loop-aprovação-humana-na-escrita): toda escrita da LLM vira
+> uma pendência que só executa depois do clique do usuário. Ainda assim, é ambiente de
+> desenvolvimento — senha igual ao username, Postgres com credenciais padrão. Rode em `localhost`.
 > Detalhes em [Aviso de segurança](#aviso-de-segurança).
 
 ![O chat respondendo com um gráfico de pizza](docs/demo-chart.png)
@@ -165,9 +166,10 @@ ação pendente para sempre.</sub></p>
 
 | Diretório | Stack | Porta | Responsabilidade |
 |-----------|-------|-------|------------------|
-| [`logistic-webui/`](logistic-webui/README.md) | Vite 8, Chart.js 4, marked (JS puro) | 5173 | Chat no browser; renderiza markdown, tabela e gráfico |
+| [`logistic-webui/`](logistic-webui/README.md) | Vite 8, Chart.js 4, marked (JS puro) | 5173 | Chat no browser; login, renderiza markdown, tabela e gráfico |
 | [`logistic-agent/`](logistic-agent/README.md) | Java 21, Spring Boot 4, Spring AI (MCP client) | 8080 | Conversa com a LLM, descobre as tools MCP, monta o `renderData` |
 | [`logistic-api/`](logistic-api/README.md) | Java 21, Spring Boot 4, JPA, Flyway, MCP server | 8081 | Dono do domínio e do banco; expõe REST + tools MCP |
+| Keycloak (`quay.io/keycloak/keycloak:26.7`) | Realm `logistic`, importado no primeiro boot | 8090 | Autenticação/autorização OAuth2 das três apps acima |
 
 ## Pré-requisitos
 
@@ -201,11 +203,32 @@ Um comando sobe tudo; `Ctrl+C` derruba tudo. Ao final o script imprime:
 | <http://localhost:8080> | logistic-agent |
 | <http://localhost:8081> | logistic-api |
 | <http://localhost:8081/swagger-ui.html> | Swagger da API |
+| <http://localhost:8090> | Keycloak (console admin: `admin`/`admin`) |
 
 O que o script faz, em ordem: checa pré-requisitos e portas, confere que os artefatos existem, sobe o
-Postgres e espera o `pg_isready`, sobe a API e espera o `/actuator/health`, semeia o banco se
-estiver vazio, sobe o agent e espera o `/api/chat/health`, sobe o webui. A espera entre
-etapas não é opcional — sem ela o agent sobe antes das tools MCP existirem e falha o handshake.
+Postgres **e** o Keycloak (que importa o realm `logistic` no primeiro boot) e espera os dois ficarem
+prontos, sobe a API e espera o `/actuator/health`, semeia o banco se estiver vazio, sobe o agent e
+espera o `/api/chat/health`, sobe o webui. A espera entre etapas não é opcional — sem ela o agent sobe
+antes das tools MCP existirem e falha o handshake, ou o Keycloak não está pronto para validar token
+nenhum.
+
+### Login e usuários
+
+Abrir <http://localhost:5173> redireciona para a tela de login do Keycloak — não dá para usar o chat
+sem entrar. Três usuários já vêm no realm importado, senha igual ao username:
+
+| Usuário | Senha | Consegue |
+|---------|-------|----------|
+| `user1` | `user1` | Conversar, consultar dados e **confirmar** escritas (cadastrar, excluir) |
+| `user2` | `user2` | Conversar e consultar dados — **não** vê as tools de escrita, e pedir uma exclusão recebe "não tenho permissão" já na primeira resposta |
+| `admin` | `admin` | Tudo que `user1` consegue, mais acesso administrativo |
+
+A sessão fica ociosa por até 5 minutos antes de expirar (só quando não há atividade — uma resposta
+longa da LLM não desloga ninguém no meio); depois disso o próximo clique manda de volta para o login.
+`Sair` (no cabeçalho do chat) encerra a sessão no Keycloak também, não só no browser.
+
+Quer testar as duas contas? Duas abas anônimas do navegador (uma pra cada usuário) — sessões
+normais do mesmo browser compartilham o Keycloak logado.
 
 ## Opções dos scripts
 
@@ -303,10 +326,14 @@ Decisões de desenho que valem citar:
 - **Só roda quando pedido.** O `surefire` exclui a tag `eval` no build padrão; `-Peval` inverte e
   roda *apenas* esses testes. Eval depende de infraestrutura externa e de uma LLM — não pode ser
   gate de commit.
-- **Quem roda garante o ambiente.** Um `ExecutionCondition` confere a API e a LLM **antes** de o
-  Spring subir o contexto: falta alguma coisa, aborta em milissegundos com uma frase acionável, em
-  vez de um `Failed to load ApplicationContext` de trinta linhas. Falha, nunca pula: um skip verde
-  esconderia que nada foi medido.
+- **Quem roda garante o ambiente.** Um `ExecutionCondition` confere a API, a LLM **e o Keycloak**
+  antes de o Spring subir o contexto: falta alguma coisa, aborta em milissegundos com uma frase
+  acionável, em vez de um `Failed to load ApplicationContext` de trinta linhas. Falha, nunca pula: um
+  skip verde esconderia que nada foi medido.
+- **Autenticado como usuário de máquina.** O eval chama o agent direto (não passa pelo login do
+  webui), mas a chamada MCP continua exigindo token: `eval-user` (realm `logistic`, role `admin`)
+  entra via *direct grant*, sem UI. Não é um atalho que desliga a autorização — é o mesmo caminho de
+  um chamador de verdade, autenticado.
 - **O assert é sobre a taxa de acerto**, não caso a caso. Com LLM, um caso isolado falha por ruído e
   o assert exato deixaria o build vermelho de forma aleatória. Piso default 75%, ajustável com
   `-Deval.threshold=0.9`.
@@ -354,10 +381,10 @@ Caso novo é uma entrada nova no JSON, sem código.
 Para debugar no IDE, sem os scripts:
 
 ```bash
-# 1. banco
+# 1. banco + Keycloak (o realm "logistic" é importado no primeiro boot do container)
 docker compose up -d
 
-# 2. api (Flyway cria o schema na subida)
+# 2. api (Flyway cria o schema na subida; o JwtDecoder já busca o issuer no Keycloak aqui)
 cd logistic-api && ./mvnw spring-boot:run
 
 # 3. seed, se o banco estiver vazio
@@ -505,25 +532,34 @@ Roteiro de demo e teste de fumaça, com o navegador em <http://localhost:5173>:
 
 ## Aviso de segurança
 
-> **Esta stack não deve ser exposta na rede.** Ela é um ambiente de desenvolvimento local:
+> **Esta stack não deve ser exposta na rede.** As três aplicações (webui, agent, api) exigem token
+> válido do Keycloak — a `logistic-api` valida `aud=logistic-api`, o agent troca o token do browser
+> por um desses via RFC 8693 (nunca repassa o token do usuário direto para o MCP), e cada tool MCP de
+> escrita confere a role certa antes de rodar. Ainda assim é ambiente de desenvolvimento local, não
+> um deploy de produção:
 >
-> - a `logistic-api` **não tem autenticação** — qualquer um que alcance a porta 8081 lê e escreve no domínio;
-> - o Postgres sobe com **credenciais padrão** (`postgres` / `postgres`) e a porta 5432 publicada;
-> - o **MCP server é aberto**, sem token, e inclui a tool `executeQuery`, que roda `SELECT` arbitrário
->   (numa role read-only, mas ainda assim lê o banco inteiro);
-> - a role `logistic_ro` sobe com senha fixa no `V2__readonly_role.sql`, versionada no repositório;
-> - o Langfuse opcional segue a mesma linha: chaves de API, `ENCRYPTION_KEY` e senha de login
->   versionadas no `docker-compose.yaml` (profile `langfuse`), e os traces guardam prompt e resposta
->   em claro;
-> - a escrita da LLM **passa por confirmação humana**, mas isso é guardrail de produto, não
->   controle de acesso: quem chama a `logistic-api` direto na 8081 escreve sem passar por nenhum
->   card, e o endpoint de confirmação aceita qualquer `sessionId` que apresente o id da pendência;
+> - **credenciais fracas por desenho**: senha igual ao username nos três usuários do realm
+>   (`user1`/`user1`, `user2`/`user2`, `admin`/`admin`), Postgres com `postgres`/`postgres` e a porta
+>   5432 publicada, Keycloak admin `admin`/`admin`;
+> - a role `logistic_ro` sobe com senha fixa no `V2__readonly_role.sql`, versionada no repositório —
+>   ela só dá `SELECT`, mas ainda assim lê o banco inteiro por trás do `executeQuery`;
+> - **token no browser**: a webui é SPA pública (PKCE, sem backend próprio) — o access token vive no
+>   `sessionStorage`, exposto a XSS. Mitigado por lifespan curto (10 min) e rotation de refresh token,
+>   não eliminado; um BFF fecharia essa fresta, mas está fora do escopo atual (ponto único na frente
+>   de múltiplos agents/APIs, não um componente dentro deste);
+>   veja o porquê em [`CLAUDE.md`](CLAUDE.md#segurança);
+> - o Langfuse opcional segue a mesma linha de senha fraca: chaves de API, `ENCRYPTION_KEY` e senha de
+>   login versionadas no `docker-compose.yaml` (profile `langfuse`), e os traces guardam prompt e
+>   resposta em claro;
+> - a escrita da LLM **passa por confirmação humana**, mas isso é guardrail de produto pensado para a
+>   LLM, não controle de acesso adicional: quem já tem um token válido com a role `write` grava
+>   direto na `logistic-api`, sem passar por card nenhum — é o mesmo poder que confirmar teria dado;
 > - **não há defesa contra injeção de prompt por dado**: o retorno das tools entra no contexto do
 >   modelo como texto, então um endereço, nome de motorista ou bairro gravado no banco com um
 >   "ignore as instruções anteriores e ..." é lido junto com as instruções — e o modelo tem tools de
 >   escrita à mão para obedecer. A confirmação humana reduz o estrago (a escrita fica visível na
->   tela antes de executar), mas quem escreve no banco (ou na API aberta) escreve, na prática, no
->   prompt.
+>   tela antes de executar) e agora exige um usuário autenticado com `write`, mas quem tem essa role
+>   e escreve dado malicioso no banco escreve, na prática, no prompt de quem ler depois.
 >
 > Rode em `localhost`. Não publique em rede compartilhada nem na internet.
 
