@@ -1,5 +1,6 @@
 package br.com.fabio.logistic.mcp;
 
+import io.modelcontextprotocol.common.McpTransportContext;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.stereotype.Component;
 
@@ -13,13 +14,20 @@ import org.springframework.stereotype.Component;
 @Component
 public class SchemaMcpTools {
 
+    private final McpAuthorization mcpAuthorization;
+
+    public SchemaMcpTools(McpAuthorization mcpAuthorization) {
+        this.mcpAuthorization = mcpAuthorization;
+    }
+
     @McpTool(description = """
             Descreve as tabelas, campos, enums e a tradução de status PT-BR do banco de logística.
             Use quando o usuário perguntar sobre o modelo de dados em si — quais status existem,
             que campos uma entidade tem, como as tabelas se relacionam. Para montar uma query, o
             schema já está na descrição do executeQuery.
             """)
-    public String describeSchema() {
+    public String describeSchema(McpTransportContext ctx) {
+        mcpAuthorization.require(ctx, "read");
         return SchemaText.FULL;
     }
 }

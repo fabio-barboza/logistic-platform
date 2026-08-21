@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.stubbing.Answer;
 import org.mockito.stubbing.OngoingStubbing;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.tool.definition.ToolDefinition;
+import org.springframework.ai.tool.execution.ToolExecutionException;
 import org.springframework.beans.factory.ObjectProvider;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -70,6 +72,37 @@ class ChatServiceTest {
             llmCalls.incrementAndGet();
             return answer.answer(invocation);
         };
+    }
+
+    /**
+     * A tool MCP recusada por falta de permissão chega ao agent como {@link ToolExecutionException}
+     * cuja causa carrega o marcador {@code insufficient_scope} (ver ChatClientConfig e
+     * McpAuthorizationException no logistic-api) — ChatService precisa reconhecer isso e responder
+     * com uma mensagem amigável, em vez de deixar a exceção estourar para o controller.
+     */
+    @Test
+    void permissionDeniedToolCallReturnsFriendlyMessage() {
+        ToolExecutionException denied = new ToolExecutionException(
+                ToolDefinition.builder().name("deleteDriver").description("d").inputSchema("{}").build(),
+                new IllegalStateException("Error invoking method: deleteDriver\ninsufficient_scope: requer a role \"write\""));
+        whenLlmAnswers().thenThrow(denied);
+
+        ChatMessageDTO response = chatService.respond("exclua o motorista X", "sessao-1");
+
+        assertThat(response.content()).isEqualTo("Você não tem permissão para executar essa operação.");
+        assertThat(response.renderData()).isNull();
+        assertThat(response.pendingAction()).isNull();
+    }
+
+    @Test
+    void toolExecutionExceptionWithoutMarkerPropagates() {
+        ToolExecutionException other = new ToolExecutionException(
+                ToolDefinition.builder().name("createOrder").description("d").inputSchema("{}").build(),
+                new IllegalStateException("algum outro erro de negócio"));
+        whenLlmAnswers().thenThrow(other);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> chatService.respond("crie um pedido", "sessao-1"))
+                .isSameAs(other);
     }
 
     @Test

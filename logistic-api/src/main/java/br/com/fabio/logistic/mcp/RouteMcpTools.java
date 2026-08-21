@@ -5,6 +5,7 @@ import br.com.fabio.logistic.dto.OrderResponse;
 import br.com.fabio.logistic.dto.RouteRequest;
 import br.com.fabio.logistic.dto.RouteResponse;
 import br.com.fabio.logistic.service.RouteService;
+import io.modelcontextprotocol.common.McpTransportContext;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.stereotype.Component;
@@ -16,9 +17,11 @@ import java.util.UUID;
 public class RouteMcpTools {
 
     private final RouteService routeService;
+    private final McpAuthorization mcpAuthorization;
 
-    public RouteMcpTools(RouteService routeService) {
+    public RouteMcpTools(RouteService routeService, McpAuthorization mcpAuthorization) {
         this.routeService = routeService;
+        this.mcpAuthorization = mcpAuthorization;
     }
 
     @McpTool(description = """
@@ -28,8 +31,10 @@ public class RouteMcpTools {
             Exemplo: driverId="3fa85f64-...", status="IN_PROGRESS".
             """)
     public RouteResponse createRoute(
+            McpTransportContext ctx,
             @McpToolParam(description = "Id (UUID) do motorista responsável pela rota") UUID driverId,
             @McpToolParam(description = "Status inicial da rota: IN_PROGRESS, COMPLETED, COMPLETED_WITH_FAILURES ou CANCELED") String status) {
+        mcpAuthorization.require(ctx, "write");
         return routeService.create(new RouteRequest(driverId, RouteStatus.valueOf(status.toUpperCase())));
     }
 
@@ -40,8 +45,10 @@ public class RouteMcpTools {
             executeQuery anterior. Exemplo: id="3fa85f64-...", status="COMPLETED".
             """)
     public RouteResponse updateRouteStatus(
+            McpTransportContext ctx,
             @McpToolParam(description = "Id (UUID) da rota") UUID id,
             @McpToolParam(description = "Novo status da rota") String status) {
+        mcpAuthorization.require(ctx, "write");
         return routeService.updateStatus(id, RouteStatus.valueOf(status.toUpperCase()));
     }
 
@@ -52,8 +59,10 @@ public class RouteMcpTools {
             Exemplo: orderId="3fa85f64-...", routeId="7c9e6679-...".
             """)
     public OrderResponse assignOrderToRoute(
+            McpTransportContext ctx,
             @McpToolParam(description = "Id (UUID) do pedido a ser alocado") UUID orderId,
             @McpToolParam(description = "Id (UUID) da rota de destino") UUID routeId) {
+        mcpAuthorization.require(ctx, "write");
         return routeService.assignOrder(routeId, orderId);
     }
 }

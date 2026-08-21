@@ -6,6 +6,7 @@ import br.com.fabio.logisticagent.confirm.PendingActionMapper;
 import br.com.fabio.logisticagent.dto.ChatMessageDTO;
 import br.com.fabio.logisticagent.dto.PendingActionDTO;
 import br.com.fabio.logisticagent.dto.render.RenderableContent;
+import br.com.fabio.logisticagent.config.ChatClientConfig;
 import br.com.fabio.logisticagent.tool.RenderHolder;
 import br.com.fabio.logisticagent.tool.ToolCallHolder;
 import io.micrometer.tracing.Span;
@@ -14,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.tool.execution.ToolExecutionException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
@@ -177,6 +179,25 @@ public class ChatService {
         // A tool de escrita só vê os argumentos que o modelo escreveu; o dono da pendência vem daqui.
         pendingActionHolder.setSessionId(sessionId);
 
+        try {
+            return respondOrThrow(userMessage, sessionId, span, renderAllowed);
+        } catch (ToolExecutionException e) {
+            if (!isPermissionDenied(e)) {
+                throw e;
+            }
+            log.warn("Chamada de tool recusada por falta de permissão. sessionId={}", sessionId, e);
+            return new ChatMessageDTO("assistant", "Você não tem permissão para executar essa operação.", null, null);
+        }
+    }
+
+    /** Marcador vindo de McpAuthorizationException (logistic-api) — ver ChatClientConfig. */
+    private boolean isPermissionDenied(ToolExecutionException e) {
+        Throwable cause = e.getCause();
+        String message = cause != null ? cause.getMessage() : null;
+        return message != null && message.contains(ChatClientConfig.PERMISSION_DENIED_MARKER);
+    }
+
+    private ChatMessageDTO respondOrThrow(String userMessage, String sessionId, Span span, boolean renderAllowed) {
         String content = ask(userMessage, sessionId);
 
         for (String correction : RENDER_CORRECTIONS) {
