@@ -16,6 +16,8 @@ API_PORT=8081
 AGENT_PORT=8080
 WEBUI_PORT=5173
 DB_PORT=5432
+KEYCLOAK_PORT=8090
+KEYCLOAK_MGMT_PORT=9000   # porta de management do Keycloak, onde vive o /health
 LLM_URL="http://localhost:8200"
 
 # Preenchidos durante a subida; usados pelo shutdown.
@@ -81,6 +83,7 @@ URLs depois da subida:
   http://localhost:8080   logistic-agent
   http://localhost:8081   logistic-api
   http://localhost:8081/swagger-ui.html   Swagger
+  http://localhost:8090   Keycloak (admin/admin)
 EOF
 }
 
@@ -170,7 +173,7 @@ check_ports() {
         fi
     fi
 
-    for entry in "$API_PORT:logistic-api" "$AGENT_PORT:logistic-agent" "$WEBUI_PORT:logistic-webui"; do
+    for entry in "$API_PORT:logistic-api" "$AGENT_PORT:logistic-agent" "$WEBUI_PORT:logistic-webui" "$KEYCLOAK_PORT:keycloak"; do
         port="${entry%%:*}"
         label="${entry##*:}"
         if port_is_busy "$port"; then
@@ -182,7 +185,7 @@ check_ports() {
     if [ "$busy" = true ]; then
         fail "libere as portas acima antes de subir. Um container de outra sessão pode estar segurando a 5432: 'docker rm -f $DB_CONTAINER'."
     fi
-    info "portas 8080, 8081 e 5173 livres"
+    info "portas 8080, 8081, 5173 e 8090 livres"
 }
 
 check_llm() {
@@ -345,6 +348,11 @@ start_postgres() {
     STACK_STARTED=true
     docker compose -f "$COMPOSE_FILE" up -d || fail "falha ao subir o Postgres via docker compose."
     wait_for_postgres || fail "Postgres não ficou pronto em 60s. Veja: docker logs $DB_CONTAINER"
+
+    # Timeout maior que o dos outros: o Keycloak importa o realm no primeiro boot
+    # (--import-realm) e isso demora mais que uma subida normal.
+    wait_for_http "http://localhost:$KEYCLOAK_MGMT_PORT/health/ready" "keycloak" 120 \
+        || fail "Keycloak não ficou pronto em 120s. Veja: docker logs logistic-keycloak"
 }
 
 # O 'exec' faz o java substituir o subshell, então $! é o PID do próprio java —
@@ -546,6 +554,7 @@ print_urls() {
   agent      http://localhost:$AGENT_PORT
   api        http://localhost:$API_PORT
   Swagger    http://localhost:$API_PORT/swagger-ui.html
+  Keycloak   http://localhost:$KEYCLOAK_PORT (admin/admin)
 
   Logs em logs/ (ex.: tail -f logs/logistic-agent.log)
   Ctrl+C derruba tudo.

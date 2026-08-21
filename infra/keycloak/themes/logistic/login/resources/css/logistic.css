@@ -1,0 +1,7 @@
+/*
+ * Esqueleto do tema "logistic" — herda do tema padrão do Keycloak (theme.properties),
+ * então a tela de login já funciona sem nada aqui. Customização visual é trabalho
+ * futuro: as variáveis de cor da aplicação estão em logistic-webui/src/style.css
+ * (--bg, --surface, --accent, --text, e o bloco [data-theme="light"]) — usar as mesmas
+ * quando este arquivo ganhar conteúdo.
+ */

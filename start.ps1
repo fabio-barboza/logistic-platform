@@ -22,11 +22,13 @@ $ComposeFile  = Join-Path $RootDir 'docker-compose.yaml'
 $SeedFile     = Join-Path $RootDir 'logistic-api\src\main\resources\db\seed\dados.sql'
 $DbContainer  = 'logisticdb'
 
-$ApiPort   = 8081
-$AgentPort = 8080
-$WebuiPort = 5173
-$DbPort    = 5432
-$LlmUrl    = 'http://localhost:8200'
+$ApiPort         = 8081
+$AgentPort       = 8080
+$WebuiPort       = 5173
+$DbPort          = 5432
+$KeycloakPort    = 8090
+$KeycloakMgmtPort = 9000   # porta de management do Keycloak, onde vive o /health
+$LlmUrl          = 'http://localhost:8200'
 
 # Preenchidos durante a subida; usados pelo Stop-Stack.
 $script:ApiProcess     = $null
@@ -86,6 +88,7 @@ URLs depois da subida:
   http://localhost:8080   logistic-agent
   http://localhost:8081   logistic-api
   http://localhost:8081/swagger-ui.html   Swagger
+  http://localhost:8090   Keycloak (admin/admin)
 '@ | Write-Host
 }
 
@@ -172,9 +175,10 @@ function Test-Ports {
     }
 
     $ports = [ordered]@{
-        $ApiPort   = 'logistic-api'
-        $AgentPort = 'logistic-agent'
-        $WebuiPort = 'logistic-webui'
+        $ApiPort      = 'logistic-api'
+        $AgentPort    = 'logistic-agent'
+        $WebuiPort    = 'logistic-webui'
+        $KeycloakPort = 'keycloak'
     }
 
     foreach ($port in $ports.Keys) {
@@ -187,7 +191,7 @@ function Test-Ports {
     if ($busy.Count -gt 0) {
         Fail "libere as portas acima antes de subir. Um container de outra sessão pode estar segurando a 5432: 'docker rm -f $DbContainer'."
     }
-    Write-Info 'portas 8080, 8081 e 5173 livres'
+    Write-Info 'portas 8080, 8081, 5173 e 8090 livres'
 }
 
 function Test-Llm {
@@ -385,6 +389,12 @@ function Start-Postgres {
     }
     if (-not (Wait-ForPostgres)) {
         Fail "Postgres não ficou pronto em 60s. Veja: docker logs $DbContainer"
+    }
+
+    # Timeout maior que o dos outros: o Keycloak importa o realm no primeiro boot
+    # (--import-realm) e isso demora mais que uma subida normal.
+    if (-not (Wait-ForHttp -Url "http://localhost:$KeycloakMgmtPort/health/ready" -Label 'keycloak' -TimeoutSeconds 120 -Process $null)) {
+        Fail 'Keycloak não ficou pronto em 120s. Veja: docker logs logistic-keycloak'
     }
 }
 
@@ -602,6 +612,7 @@ function Show-Urls {
   agent      http://localhost:$AgentPort
   api        http://localhost:$ApiPort
   Swagger    http://localhost:$ApiPort/swagger-ui.html
+  Keycloak   http://localhost:$KeycloakPort (admin/admin)
 
   Logs em logs\ (ex.: Get-Content -Wait logs\logistic-agent.log)
   Ctrl+C derruba tudo.

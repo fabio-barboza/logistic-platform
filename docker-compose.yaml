@@ -44,6 +44,48 @@ services:
       interval: 5s
       retries: 10
 
+  # Autenticação/autorização das três aplicações (realm "logistic", provisionado no
+  # primeiro boot via --import-realm — ver infra/keycloak/import). Sem profile, como o
+  # Postgres: faz parte da stack padrão.
+  #
+  # start-dev: modo de desenvolvimento (sem HTTPS, sem hostname estrito). Correto para a
+  # stack local; num deploy real vira `start` com KC_HOSTNAME e TLS.
+  #
+  # Senha fixa do admin (admin/admin), mesmo critério do Postgres nesta stack: ambiente
+  # local, não exponha em rede.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7
+    container_name: logistic-keycloak
+    restart: unless-stopped
+    # Sem --features aqui: verificado via /admin/serverinfo no 26.7 que
+    # TOKEN_EXCHANGE_STANDARD_V2 (RFC 8693, o que a fase 3 usa) já vem type=DEFAULT,
+    # enabled=true. O flag "token-exchange" sem sufixo é o v1 legado (PREVIEW,
+    # deprecated, desligado por padrão) — não é o caminho, não ligar.
+    command: start-dev --import-realm
+    ports:
+      - "8090:8080"
+      - "9000:9000"   # porta de management, onde vive o /health
+    volumes:
+      - ./infra/keycloak/import:/opt/keycloak/data/import:ro
+      - ./infra/keycloak/themes/logistic:/opt/keycloak/themes/logistic:ro
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_ENABLED: "true"
+    healthcheck:
+      # A imagem do Keycloak não tem curl nem wget. /dev/tcp do bash é o caminho que
+      # funciona sem instalar nada no container.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '\"status\": \"UP\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # ATENÇÃO: o volume de import acima é :ro e só é lido no primeiro boot. Mudou o realm
+  # JSON depois de o Keycloak já ter subido? `docker compose down -v` e suba de novo, ou
+  # importe pela UI — é a pegadinha número um de --import-realm.
+
   langfuse-web:
     image: langfuse/langfuse:3
     container_name: langfuse-web
