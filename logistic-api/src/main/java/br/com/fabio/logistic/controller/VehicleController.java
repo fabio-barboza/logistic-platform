@@ -31,11 +31,11 @@ public class VehicleController {
 
     @GetMapping("/api/vehicles")
     public Page<VehicleResponse> search(@RequestParam(required = false) String name,
-                                         @RequestParam(required = false) Integer capacityMin,
-                                         @RequestParam(required = false) Integer capacityMax,
+                                         @RequestParam(required = false) Integer capacityMinKg,
+                                         @RequestParam(required = false) Integer capacityMaxKg,
                                          @RequestParam(required = false) UUID driverId,
                                          Pageable pageable) {
-        VehicleFilter filter = new VehicleFilter(name, capacityMin, capacityMax, driverId);
+        VehicleFilter filter = new VehicleFilter(name, capacityMinKg, capacityMaxKg, driverId);
         return vehicleService.search(filter, pageable);
     }
 

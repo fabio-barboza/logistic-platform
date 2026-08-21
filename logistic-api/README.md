@@ -31,7 +31,7 @@ vehicle ◄──── driver_vehicle ────► driver
 
 | Tabela | Campos |
 |--------|--------|
-| `vehicle` | id, name, capacity, created_at, updated_at |
+| `vehicle` | id, name, capacity_kg, created_at, updated_at |
 | `driver` | id, name, email (unique), birthday, city, state (char 2), created_at, updated_at |
 | `driver_vehicle` | id, driver_id, vehicle_id, created_at (unique driver+vehicle) |
 | `route` | id, driver_id, status (enum nativo `route_status`), created_at, updated_at |
@@ -69,30 +69,47 @@ em JPQL com o padrão `:param IS NULL OR ...` — sem Criteria API, sem Specific
 | Entidade | Filtros |
 |----------|---------|
 | `driver` | `name` (contém, case-insensitive), `email` (contém), `city`, `state`, `birthdayFrom`, `birthdayTo`, `vehicleId` |
-| `vehicle` | `name` (contém), `capacityMin`, `capacityMax`, `driverId` |
+| `vehicle` | `name` (contém), `capacityMinKg`, `capacityMaxKg`, `driverId` |
 | `route` | `status` (lista), `driverId`, `driverName` (contém), `createdFrom`, `createdTo` |
 | `order` | `status` (lista), `routeId`, `city`, `state`, `neighborhood`, `zipCode`, `createdFrom`, `createdTo`, `unassigned` |
 
-Paginação no REST é a do Spring Data: `page`, `size` e `sort`. As tools MCP não expõem
-`Pageable` — usam um `limit` simples (default 100, teto 500), traduzido para `Pageable` em
-`McpPageSupport`, porque uma LLM lida melhor com um número do que com um objeto de paginação.
+Paginação no REST é a do Spring Data: `page`, `size` e `sort`. Isso vale só para o REST: as tools
+MCP não leem mais dados (ver abaixo), então não há paginação do lado da LLM — o que limita o
+retorno dela é o `LIMIT` da própria query, com teto implícito de 50 linhas.
 
 ## Tools MCP
 
 Transporte **Streamable HTTP**, endpoint `http://localhost:8081/mcp`.
 
+São 10 tools, divididas por natureza: **leitura é só `executeQuery`**, escrita é tipada.
+
 | Tool | O que faz |
 |------|-----------|
-| `searchDrivers` / `getDriver` / `createDriver` | motoristas |
+| `executeQuery` | `SELECT` livre, escrito pela LLM, sobre a conexão read-only — **a única forma de ler** |
+| `describeSchema` | descreve entidades, campos e valores de enum para a LLM montar a query |
+| `createDriver` | cadastra motorista |
 | `linkDriverVehicle` | vincula veículo a motorista (`driver_vehicle`) |
-| `searchVehicles` / `getVehicle` / `createVehicle` | veículos |
-| `searchRoutes` / `getRoute` / `createRoute` / `updateRouteStatus` | rotas |
-| `countRoutesBy` | contagem de rotas agrupada por `status` ou `driver` |
-| `getRouteOrders` / `assignOrderToRoute` | pedidos de uma rota |
-| `searchOrders` / `getOrder` / `createOrder` / `updateOrderStatus` | pedidos |
-| `countOrdersBy` | contagem de pedidos agrupada |
-| `describeSchema` | descreve entidades, campos e valores de enum para a LLM |
-| `executeQuery` | `SELECT` livre, escrito pela LLM, sobre a conexão read-only |
+| `createVehicle` | cadastra veículo |
+| `createRoute` / `updateRouteStatus` | cria rota e muda status |
+| `createOrder` / `updateOrderStatus` | cria pedido e muda status |
+| `assignOrderToRoute` | aloca pedido numa rota |
+
+Não existem tools tipadas de busca ou contagem — existiam, e foram removidas. Dois motivos:
+
+1. **Sobreposição degradava a escolha.** `executeQuery` respondia tudo que `searchOrders`,
+   `countOrdersBy` e companhia respondiam, e o modelo escolhia errado nas duas direções. Um terço
+   dos casos do eval existia só para policiar essa fronteira, que era arbitrária — vinha da
+   implementação, não do domínio.
+2. **Elas não alcançavam perguntas compostas.** "O motorista com mais falhas por estado" é um
+   argmax por grupo. Nenhuma tool tipada expressava isso, e `searchOrders` sequer tinha filtro por
+   motorista — o caminho seria 1.259 chamadas de `getRouteOrders` e agregar 11 mil pedidos dentro
+   da janela de contexto. Sem caminho de tool, o modelo não dizia "não consigo": inventava a
+   resposta. Com `executeQuery` é uma query com CTE e window function.
+
+O custo dessa escolha é autorização: filtrar por permissão (um usuário vê SP, outro não) não cabe
+em parâmetro de tool quando o SQL é livre. A resposta é **Row-Level Security** no Postgres, com
+`SET LOCAL` na conexão read-only — a política vale para qualquer SQL que a LLM escrever, sem
+parsear nada. Ainda não implementado.
 
 As descrições das tools e dos parâmetros são o que a LLM lê para decidir o que chamar —
 mudar o texto muda o comportamento do modelo. Trate-as como código.

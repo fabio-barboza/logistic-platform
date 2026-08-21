@@ -16,27 +16,25 @@ public class QueryMcpTools {
     }
 
     @McpTool(description = """
-            Executa uma consulta SELECT livre em PostgreSQL, para perguntas que as outras tools não
-            cobrem: cruzamentos entre tabelas (join), agregações (GROUP BY, COUNT, AVG) ou recortes
-            fora do catálogo de filtros conhecidos. Rode sobre uma conexão com permissão apenas de
-            leitura — INSERT/UPDATE/DELETE/CREATE são recusados pelo próprio banco.
-
-            Tabelas disponíveis: vehicle, driver, driver_vehicle, route, "order" (nome reservado —
-            sempre entre aspas duplas). Use a tool describeSchema para ver colunas e enums antes de
-            montar a query.
+            Consulta os dados da plataforma com um SELECT em PostgreSQL. Esta é a ÚNICA forma de ler
+            dados: qualquer pergunta sobre pedidos, rotas, motoristas ou veículos — listar, contar,
+            agrupar, cruzar tabelas, ranquear — é respondida aqui. As demais tools só escrevem.
+            Nunca responda com dados sem antes obtê-los desta tool. Roda sobre uma conexão com
+            permissão apenas de leitura — INSERT/UPDATE/DELETE/CREATE são recusados pelo próprio banco.
 
             Regras: só um comando SELECT (ou WITH ... SELECT) por chamada; não use ';'; se não
-            informar LIMIT, o resultado é limitado a 500 linhas automaticamente.
+            informar LIMIT, o resultado é limitado a 50 linhas automaticamente. Para ranking e
+            "top N", ordene e limite na própria query em vez de trazer tudo.
 
-            Motoristas: driver.name NÃO é único (há homônimos). Agrupe sempre por d.id junto com
-            d.name, e para falar de um motorista específico filtre por d.id — nunca por d.name, que
-            soma pessoas diferentes. O id vem de searchDrivers ou da própria query anterior.
+            O schema completo vem abaixo — use estes nomes, não os suponha.
 
-            Falha de entrega é o.status = 'DELIVER_FAILURE', só isso. Não filtre r.status junto: o
-            status da rota é outra dimensão, e um pedido com falha aparece também em rota COMPLETED
-            ou CANCELED — filtrar por rota subconta sem avisar.
+            """
+            + SchemaText.FULL
+            + """
 
-            Exemplo 1 — motoristas de SP com mais falhas de entrega:
+            EXEMPLOS
+            --------
+            1. Motoristas de SP com mais falhas de entrega:
             SELECT d.id, d.name, COUNT(*) AS falhas
             FROM driver d
             JOIN route r ON r.driver_id = d.id
@@ -46,32 +44,36 @@ public class QueryMcpTools {
             ORDER BY falhas DESC
             LIMIT 10
 
-            Exemplo 2 — total de pedidos entregues por veículo:
-            SELECT v.name, COUNT(*) AS entregas
-            FROM vehicle v
-            JOIN driver_vehicle dv ON dv.vehicle_id = v.id
-            JOIN driver d ON d.id = dv.driver_id
-            JOIN route r ON r.driver_id = d.id
-            JOIN "order" o ON o.route_id = r.id
-            WHERE o.status = 'DELIVERED'
-            GROUP BY v.name
+            2. Resolver o id de um motorista citado pelo nome, antes de perguntar sobre ele:
+            SELECT id, name, city, state FROM driver WHERE name ILIKE '%juliana%'
 
-            Exemplo 3 — cidades com falha de entrega de UM motorista, quando o usuário cita o nome
-            ("as cidades onde a Juliana teve problemas"). Nome não é chave: pegue antes o id com
-            searchDrivers e filtre por ele. Filtrar por d.name somaria motoristas homônimos de
-            outros estados:
+            3. Cidades com falha de entrega de UM motorista, usando o id do passo anterior:
             SELECT o.city, COUNT(*) AS falhas
             FROM route r
             JOIN "order" o ON o.route_id = r.id
-            WHERE r.driver_id = '<id vindo de searchDrivers, nunca este literal>' AND o.status = 'DELIVER_FAILURE'
+            WHERE r.driver_id = '<id resolvido antes, nunca este literal>' AND o.status = 'DELIVER_FAILURE'
             GROUP BY o.city
             ORDER BY falhas DESC
 
-            Exemplo 4 — pedidos criados nos últimos 30 dias por bairro:
-            SELECT neighborhood, COUNT(*) FROM "order"
-            WHERE created_at >= NOW() - INTERVAL '30 days'
-            GROUP BY neighborhood
-            ORDER BY COUNT(*) DESC
+            4. Contagem simples por status (para gráfico de pizza):
+            SELECT status, COUNT(*) AS total FROM "order" GROUP BY status
+
+            5. Pior motorista por estado e total de entregas do estado, numa consulta só:
+            WITH por_motorista AS (
+              SELECT d.state, d.id, d.name,
+                     COUNT(*) FILTER (WHERE o.status = 'DELIVER_FAILURE') AS falhas,
+                     COUNT(*) FILTER (WHERE o.status = 'DELIVERED') AS entregas
+              FROM driver d
+              JOIN route r ON r.driver_id = d.id
+              JOIN "order" o ON o.route_id = r.id
+              GROUP BY d.state, d.id, d.name
+            )
+            SELECT state, name, falhas,
+                   SUM(entregas) OVER (PARTITION BY state) AS entregas_estado
+            FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY state ORDER BY falhas DESC) rn
+                  FROM por_motorista) t
+            WHERE rn = 1
+            ORDER BY falhas DESC
             """)
     public String executeQuery(
             @McpToolParam(description = "Consulta SELECT em PostgreSQL. Exemplo: SELECT status, COUNT(*) FROM \"order\" GROUP BY status") String sql) {

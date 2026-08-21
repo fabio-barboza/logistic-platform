@@ -3,6 +3,7 @@ package br.com.fabio.logisticagent.service;
 import br.com.fabio.logisticagent.dto.ChatMessageDTO;
 import br.com.fabio.logisticagent.dto.render.RenderableContent;
 import br.com.fabio.logisticagent.tool.RenderHolder;
+import br.com.fabio.logisticagent.tool.ToolCallHolder;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
 import org.slf4j.Logger;
@@ -80,16 +81,45 @@ public class ChatService {
             renderizar, diga isso claramente e não prometa gráfico nem tabela.
             """);
 
+    /**
+     * Resposta que contém dados: linha de tabela markdown, item de lista com número, ou qualquer
+     * dígito solto. Usada junto com "nenhuma tool foi chamada" para detectar dado inventado — por
+     * isso é ampla de propósito: um falso positivo custa um round-trip, um falso negativo entrega
+     * número inventado ao usuário. Respostas de recusa ("não suportamos exclusão"), saudação e
+     * off-topic não têm dígito e não disparam.
+     */
+    private static final Pattern DATA_CLAIM = Pattern.compile("\\d");
+
+    /**
+     * Instruções para a resposta que trouxe dados sem consultar nada. Mesmo formato do retry de
+     * render: a primeira é branda, a segunda não deixa saída.
+     */
+    private static final List<String> DATA_CORRECTIONS = List.of("""
+            Sua resposta anterior apresentou dados (números, listagem ou tabela) sem que você tenha
+            chamado a tool executeQuery neste turno. Esses dados não vieram do banco. Refaça agora:
+            chame executeQuery com o SQL que responde exatamente à pergunta — inclusive os filtros
+            que já valiam na pergunta anterior desta conversa — e responda só com o que a tool
+            devolver.
+            """, """
+            Você respondeu de novo sem chamar executeQuery. Nada do que está na conversa anterior
+            serve como fonte: os números precisam vir de uma consulta feita AGORA. Nesta resposta,
+            chame executeQuery antes de escrever qualquer número. Se por algum motivo não conseguir
+            montar a consulta, diga isso ao usuário e não apresente dado nenhum.
+            """);
+
     /** Sessões em que a última resposta ofereceu uma visualização e o usuário ainda não respondeu. */
     private final Map<String, Boolean> pendingVisualOffer = new ConcurrentHashMap<>();
 
     private final ChatClient chatClient;
     private final RenderHolder renderHolder;
+    private final ToolCallHolder toolCallHolder;
     private final ObjectProvider<Tracer> tracerProvider;
 
-    public ChatService(ChatClient chatClient, RenderHolder renderHolder, ObjectProvider<Tracer> tracerProvider) {
+    public ChatService(ChatClient chatClient, RenderHolder renderHolder, ToolCallHolder toolCallHolder,
+                       ObjectProvider<Tracer> tracerProvider) {
         this.chatClient = chatClient;
         this.renderHolder = renderHolder;
+        this.toolCallHolder = toolCallHolder;
         this.tracerProvider = tracerProvider;
     }
 
@@ -111,12 +141,35 @@ public class ChatService {
             content = ask(correction, sessionId);
         }
 
+        for (String correction : DATA_CORRECTIONS) {
+            if (!answeredWithoutData(content)) {
+                break;
+            }
+            log.info("Resposta traz dados sem nenhuma tool chamada; refazendo com correção. sessionId={}", sessionId);
+            toolCallHolder.reset();
+            content = ask(correction, sessionId);
+        }
+
         tag(span, "langfuse.trace.output", content);
 
         RenderableContent renderData = renderHolder.get();
         rememberVisualOffer(sessionId, content, renderData);
         return new ChatMessageDTO("assistant",
                 withRenderFailureNotice(withoutDuplicatedTable(content, renderData), renderData), renderData);
+    }
+
+    /**
+     * Resposta com dados que não passaram por tool nenhuma neste turno.
+     * <p>
+     * A checagem é sobre o turno inteiro, não sobre a pergunta: o modelo trata follow-up ("e em
+     * MG?") como respondível de memória e devolve número inventado com o log de tool calls vazio.
+     * Se houve render, os dados vieram do turno anterior por decisão do usuário ("transforme isso
+     * num gráfico") e não há o que corrigir.
+     */
+    private boolean answeredWithoutData(String content) {
+        return toolCallHolder.isEmpty()
+                && renderHolder.get() == null
+                && DATA_CLAIM.matcher(nullToEmpty(content)).find();
     }
 
     /**

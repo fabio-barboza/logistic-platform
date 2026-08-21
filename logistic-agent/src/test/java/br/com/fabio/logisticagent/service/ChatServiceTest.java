@@ -4,6 +4,7 @@ import br.com.fabio.logisticagent.dto.ChatMessageDTO;
 import br.com.fabio.logisticagent.dto.render.ChartContent;
 import br.com.fabio.logisticagent.dto.render.Dataset;
 import br.com.fabio.logisticagent.tool.RenderHolder;
+import br.com.fabio.logisticagent.tool.ToolCallHolder;
 import io.micrometer.tracing.Tracer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,6 +32,7 @@ class ChatServiceTest {
     private final AtomicInteger llmCalls = new AtomicInteger();
 
     private RenderHolder renderHolder;
+    private ToolCallHolder toolCallHolder;
     private ChatClient chatClient;
     private ChatService chatService;
 
@@ -38,9 +40,13 @@ class ChatServiceTest {
     @SuppressWarnings("unchecked")
     void setUp() {
         renderHolder = new RenderHolder();
+        toolCallHolder = new ToolCallHolder();
+        // Caso normal: o modelo consultou o banco antes de responder. Os testes de render partem
+        // daí, senão cada resposta com número cairia também no retry de dado sem tool.
+        toolCallHolder.register("executeQuery");
         chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
         ObjectProvider<Tracer> tracerProvider = mock(ObjectProvider.class);
-        chatService = new ChatService(chatClient, renderHolder, tracerProvider);
+        chatService = new ChatService(chatClient, renderHolder, toolCallHolder, tracerProvider);
     }
 
     @SuppressWarnings("unchecked")
@@ -234,5 +240,67 @@ class ChatServiceTest {
             return "Há 42 pedidos.";
         }));
         chatService.respond("sim", "sessao-1");
+    }
+
+    /**
+     * Dado sem tool: o follow-up "e em MG?" devolveu 106 onde havia 423, com o log de tool calls
+     * vazio. A correção é refazer exigindo a consulta.
+     */
+    @Test
+    void dataWithoutToolCallTriggersCorrectiveRetry() {
+        toolCallHolder.reset();
+        whenLlmAnswers()
+                .thenAnswer(counting(invocation -> "São 106 pedidos entregues em MG."))
+                .thenAnswer(counting(invocation -> {
+                    toolCallHolder.register("executeQuery");
+                    return "São 423 pedidos entregues em MG.";
+                }));
+
+        ChatMessageDTO response = chatService.respond("e em MG?", "sessao-1");
+
+        assertThat(response.content()).isEqualTo("São 423 pedidos entregues em MG.");
+        assertThat(llmCalls).hasValue(2);
+    }
+
+    /** Duas correções e para: o loop de tool calls não pode ficar preso no modelo teimoso. */
+    @Test
+    void dataWithoutToolCallStopsAfterTwoCorrections() {
+        toolCallHolder.reset();
+        whenLlmAnswers().thenAnswer(counting(invocation -> "São 106 pedidos entregues em MG."));
+
+        chatService.respond("e em MG?", "sessao-1");
+
+        assertThat(llmCalls).hasValue(3);
+    }
+
+    /** Recusa e conversa não têm número: não há dado a desmentir, não se refaz. */
+    @Test
+    void answerWithoutNumbersDoesNotTriggerDataRetry() {
+        toolCallHolder.reset();
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "A plataforma não suporta exclusão de registros."));
+
+        ChatMessageDTO response = chatService.respond("apague o veículo", "sessao-1");
+
+        assertThat(response.content()).isEqualTo("A plataforma não suporta exclusão de registros.");
+        assertThat(llmCalls).hasValue(1);
+    }
+
+    /**
+     * "Transforme isso num gráfico" reaproveita os dados do turno anterior por decisão do usuário:
+     * há render, não há tool de dados, e está certo assim.
+     */
+    @Test
+    void renderReusingPreviousDataDoesNotTriggerDataRetry() {
+        toolCallHolder.reset();
+        whenLlmAnswers().thenAnswer(counting(invocation -> {
+            renderHolder.set(CHART);
+            return "Aqui está o gráfico com os 11 registros.";
+        }));
+
+        ChatMessageDTO response = chatService.respond("transforme isso num gráfico", "sessao-1");
+
+        assertThat(response.renderData()).isEqualTo(CHART);
+        assertThat(llmCalls).hasValue(1);
     }
 }

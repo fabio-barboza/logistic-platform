@@ -49,10 +49,11 @@ Constante `SYSTEM_PROMPT` em `ChatClientConfig`. Ele carrega as decisões que o 
 como adivinhar:
 
 - **Idioma e tom** — português do Brasil, conciso.
-- **Ordem de preferência entre tools** — primeiro as tipadas (`searchDrivers`, `countOrdersBy`, …),
-  `executeQuery` só para join, agregação ou recorte fora do catálogo.
-- **Contagem** — nunca listar registros e contar manualmente; usar `countOrdersBy`/`countRoutesBy`
-  ou `SELECT COUNT(*)` via `executeQuery`. Contar à mão erra em listas grandes.
+- **Leitura só por `executeQuery`** — não existem tools de busca ou contagem; as outras tools
+  apenas escrevem. E nunca apresentar dados que não vieram do retorno da tool nesta mesma resposta,
+  mesmo que a conversa anterior pareça conter a informação.
+- **Contagem e ranking** — nunca listar registros e contar manualmente: `SELECT COUNT(*)` para
+  contar, `ORDER BY ... LIMIT n` para ranquear. Contar à mão erra em listas grandes.
 - **Tradução dos status para PT-BR** — a tabela `COMPLETED = Concluído` e afins.
 - **Quando renderizar** — `renderChart` para pedido de gráfico, `renderTable` para tabela ou
   quando dados tabulares forem mais claros que texto corrido.

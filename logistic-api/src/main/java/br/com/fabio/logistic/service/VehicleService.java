@@ -29,7 +29,7 @@ public class VehicleService {
     @Transactional(readOnly = true)
     public Page<VehicleResponse> search(VehicleFilter filter, Pageable pageable) {
         Page<Vehicle> page = vehicleRepository.search(
-                filter.name(), filter.capacityMin(), filter.capacityMax(), filter.driverId(), pageable);
+                filter.name(), filter.capacityMinKg(), filter.capacityMaxKg(), filter.driverId(), pageable);
         return page.map(vehicleMapper::toResponse);
     }
 

@@ -6,7 +6,7 @@ import java.util.UUID;
 public record VehicleResponse(
         UUID id,
         String name,
-        Integer capacity,
+        Integer capacityKg,
         LocalDateTime createdAt,
         LocalDateTime updatedAt) {
 }

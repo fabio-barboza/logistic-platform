@@ -4,83 +4,22 @@ import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.stereotype.Component;
 
 /**
- * Tool que descreve o schema do banco para o modelo — existe para tirar o schema do system
- * prompt do agent. Mantenha completa e atualizada junto com V1__init.sql.
+ * Tool que descreve o schema do banco para o modelo.
+ * <p>
+ * O mesmo texto vai na descrição do executeQuery, que está sempre no contexto — esta tool existe
+ * para a pergunta explícita sobre o modelo de dados ("quais os status possíveis de uma rota?"),
+ * não como pré-requisito da consulta. O texto mora em {@link SchemaText}.
  */
 @Component
 public class SchemaMcpTools {
 
     @McpTool(description = """
             Descreve as tabelas, campos, enums e a tradução de status PT-BR do banco de logística.
-            Use antes de montar uma query para executeQuery, para saber os nomes exatos das tabelas
-            e colunas.
+            Use quando o usuário perguntar sobre o modelo de dados em si — quais status existem,
+            que campos uma entidade tem, como as tabelas se relacionam. Para montar uma query, o
+            schema já está na descrição do executeQuery.
             """)
     public String describeSchema() {
-        return """
-                TABELAS
-                -------
-                vehicle (id UUID, name VARCHAR, capacity INTEGER, created_at, updated_at)
-                  Veículos disponíveis na frota.
-
-                driver (id UUID, name VARCHAR, email VARCHAR único, birthday DATE, city VARCHAR,
-                        state CHAR(2), created_at, updated_at)
-                  Motoristas cadastrados. ATENÇÃO: name NÃO é único — existem motoristas homônimos,
-                  pessoas diferentes, em estados diferentes. A identidade é o id (email também é
-                  único). Filtrar por name soma homônimos e infla o resultado.
-
-                driver_vehicle (id UUID, driver_id UUID -> driver.id, vehicle_id UUID -> vehicle.id,
-                                created_at)
-                  Associação N:N entre motorista e veículo. Par (driver_id, vehicle_id) é único.
-
-                route (id UUID, driver_id UUID -> driver.id, status route_status, created_at, updated_at)
-                  Rotas de entrega atribuídas a um motorista.
-
-                "order" (id UUID, route_id UUID -> route.id (pode ser NULL), zip_code VARCHAR,
-                         neighborhood VARCHAR, city VARCHAR, state CHAR(2), status order_status,
-                         created_at, updated_at)
-                  Pedidos de entrega. "order" é palavra reservada no Postgres — sempre usar entre
-                  aspas duplas em SQL: SELECT * FROM "order".
-
-                ENUMS
-                -----
-                route_status: COMPLETED, COMPLETED_WITH_FAILURES, CANCELED, IN_PROGRESS
-                order_status: DELIVERED, IN_ROUTE, COLLECTED, CANCELED, DELIVER_FAILURE
-
-                TRADUÇÃO DE STATUS (usar ao responder ao usuário)
-                ---------------------------------------------------
-                route_status.COMPLETED               -> Concluído
-                route_status.COMPLETED_WITH_FAILURES  -> Concluído com falhas
-                route_status.CANCELED                 -> Cancelado
-                route_status.IN_PROGRESS              -> Em andamento
-                order_status.DELIVERED                -> Entregue
-                order_status.IN_ROUTE                 -> Em rota
-                order_status.COLLECTED                -> Coletado
-                order_status.DELIVER_FAILURE           -> Falha na entrega
-                order_status.CANCELED                 -> Cancelado
-
-                Status finalizadores (sem transição futura): route.COMPLETED, route.COMPLETED_WITH_FAILURES,
-                order.DELIVERED, order.DELIVER_FAILURE.
-
-                RELACIONAMENTOS
-                ----------------
-                driver 1---N route
-                route 1---N "order" (route_id pode ser NULL: pedido ainda não alocado)
-                driver N---N vehicle (via driver_vehicle)
-
-                REGRAS AO CONSULTAR
-                --------------------
-                1. Motorista se identifica por id, nunca por nome. Para perguntar sobre um motorista
-                   específico, obtenha o id com searchDrivers e filtre por d.id. Se mais de um
-                   motorista casar com o nome, use o recorte da própria conversa (estado, cidade)
-                   para escolher; se ainda houver empate, pergunte ao usuário de qual se trata,
-                   mostrando cidade e estado de cada um. Nunca escolha por conta própria nem some
-                   os homônimos.
-                2. Ao agregar por motorista, use GROUP BY d.id, d.name (nunca só d.name) e traga
-                   d.id no SELECT — assim a pergunta seguinte sobre "esse motorista" tem a chave.
-                3. Falha de entrega é order.status = 'DELIVER_FAILURE'. Não combine com filtro de
-                   route.status: são dimensões independentes, e pedidos com falha existem também em
-                   rotas COMPLETED e CANCELED. Só filtre route.status quando a pergunta for sobre o
-                   status da rota.
-                """;
+        return SchemaText.FULL;
     }
 }

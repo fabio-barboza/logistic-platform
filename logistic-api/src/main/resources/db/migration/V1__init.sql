@@ -25,11 +25,11 @@ CREATE TYPE order_status AS ENUM (
 -- ============================================================
 
 CREATE TABLE vehicle (
-    id         UUID         NOT NULL DEFAULT gen_random_uuid(),
-    name       VARCHAR(100) NOT NULL,
-    capacity   INTEGER      NOT NULL,
-    created_at TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP    NOT NULL DEFAULT NOW(),
+    id          UUID         NOT NULL DEFAULT gen_random_uuid(),
+    name        VARCHAR(100) NOT NULL,
+    capacity_kg INTEGER      NOT NULL,
+    created_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
 
     CONSTRAINT pk_vehicle PRIMARY KEY (id)
 );
@@ -37,7 +37,7 @@ CREATE TABLE vehicle (
 COMMENT ON TABLE  vehicle            IS 'Veículos disponíveis na frota';
 COMMENT ON COLUMN vehicle.id         IS 'Identificador único do veículo';
 COMMENT ON COLUMN vehicle.name       IS 'Nome ou modelo do veículo';
-COMMENT ON COLUMN vehicle.capacity   IS 'Capacidade de carga do veículo (em unidades ou kg, conforme regra de negócio)';
+COMMENT ON COLUMN vehicle.capacity_kg IS 'Capacidade de carga do veículo, em quilogramas';
 COMMENT ON COLUMN vehicle.created_at IS 'Data e hora de criação do registro';
 COMMENT ON COLUMN vehicle.updated_at IS 'Data e hora da última atualização do registro';
 

@@ -23,7 +23,7 @@ public class Vehicle {
     private String name;
 
     @Column(nullable = false)
-    private Integer capacity;
+    private Integer capacityKg;
 
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
@@ -62,12 +62,12 @@ public class Vehicle {
         this.name = name;
     }
 
-    public Integer getCapacity() {
-        return capacity;
+    public Integer getCapacityKg() {
+        return capacityKg;
     }
 
-    public void setCapacity(Integer capacity) {
-        this.capacity = capacity;
+    public void setCapacityKg(Integer capacityKg) {
+        this.capacityKg = capacityKg;
     }
 
     public LocalDateTime getCreatedAt() {

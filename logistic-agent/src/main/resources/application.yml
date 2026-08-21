@@ -1,4 +1,4 @@
-yml para dizer se o server:
+server:
   port: 8080
 spring:
   application:

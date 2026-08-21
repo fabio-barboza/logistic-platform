@@ -14,14 +14,14 @@ public interface VehicleRepository extends JpaRepository<Vehicle, UUID> {
     @Query("""
            SELECT v FROM Vehicle v
            WHERE (CAST(:name AS string) IS NULL OR LOWER(v.name) LIKE LOWER(CONCAT('%', CAST(:name AS string), '%')))
-             AND (CAST(:capacityMin AS integer) IS NULL OR v.capacity >= :capacityMin)
-             AND (CAST(:capacityMax AS integer) IS NULL OR v.capacity <= :capacityMax)
+             AND (CAST(:capacityMinKg AS integer) IS NULL OR v.capacityKg >= :capacityMinKg)
+             AND (CAST(:capacityMaxKg AS integer) IS NULL OR v.capacityKg <= :capacityMaxKg)
              AND (CAST(:driverId AS uuid) IS NULL OR v.id IN (
                     SELECT dv.vehicle.id FROM DriverVehicle dv WHERE dv.driver.id = :driverId))
            """)
     Page<Vehicle> search(@Param("name") String name,
-                          @Param("capacityMin") Integer capacityMin,
-                          @Param("capacityMax") Integer capacityMax,
+                          @Param("capacityMinKg") Integer capacityMinKg,
+                          @Param("capacityMaxKg") Integer capacityMaxKg,
                           @Param("driverId") UUID driverId,
                           Pageable pageable);
 }

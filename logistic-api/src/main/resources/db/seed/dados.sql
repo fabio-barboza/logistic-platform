@@ -14,10 +14,10 @@ TRUNCATE TABLE driver         RESTART IDENTITY CASCADE;
 TRUNCATE TABLE vehicle        RESTART IDENTITY CASCADE;
 
 -- ============================================================
--- VEÍCULOS (pequenos, capacidade máx 200 = Fiat Toro)
+-- VEÍCULOS (pequenos, capacidade máx 200 kg = Fiat Toro)
 -- ============================================================
 
-INSERT INTO vehicle (id, name, capacity, created_at, updated_at) VALUES
+INSERT INTO vehicle (id, name, capacity_kg, created_at, updated_at) VALUES
     ('a0000000-0000-0000-0000-000000000001', 'Motocicleta Honda CB 300',    8,   '2024-01-05 08:00:00', '2024-01-05 08:00:00'),
     ('a0000000-0000-0000-0000-000000000002', 'Motocicleta Yamaha FZ 250',   6,   '2024-01-11 08:00:00', '2024-01-11 08:00:00'),
     ('a0000000-0000-0000-0000-000000000003', 'Utilitário VW Saveiro',       15,  '2024-01-08 08:00:00', '2024-01-08 08:00:00'),

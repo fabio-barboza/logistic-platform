@@ -20,7 +20,10 @@ import java.util.regex.Pattern;
 public class QueryService {
 
     private static final Pattern LIMIT_PATTERN = Pattern.compile("(?i)\\blimit\\b");
-    private static final int MAX_ROWS = 500;
+    // Teto de linhas devolvidas quando a query não traz LIMIT. Baixo de propósito: o gargalo não é
+    // o SQL (responde em <1ms), é a LLM gerar uma linha de tabela por registro no renderTable, e o
+    // payload ocupar a janela de contexto. Com as tools tipadas de busca fora, este é o único teto.
+    private static final int MAX_ROWS = 50;
 
     private final JdbcTemplate readOnlyJdbcTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();

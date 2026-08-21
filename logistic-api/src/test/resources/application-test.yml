@@ -5,10 +5,21 @@ spring:
     password:
     driver-class-name: org.h2.Driver
   jpa:
+    # Schema vem do Flyway, a mesma V1__init.sql da produção — por isso 'none' aqui.
+    # Nem create-drop nem validate funcionam: os dois fazem o Hibernate renderizar o DDL, e o
+    # H2Dialect não tem nome de tipo para NAMED_ENUM ("no type mapping for SqlTypes code: 6001"),
+    # que é o que @JdbcTypeCode(SqlTypes.NAMED_ENUM) exige em Route.status e Order.status.
+    # Sem 'validate' os testes não checam drift entidade x schema, mas passam a rodar contra a
+    # migration de verdade — drift vira erro de SQL nos testes de repositório.
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: none
     properties:
       hibernate:
         format_sql: true
   flyway:
-    enabled: false
+    enabled: true
+    # Só db/migration: a V2 (db/roles) cria role e dá GRANT, sintaxe que não existe no H2.
+    locations: classpath:db/migration
+    # A V1 usa gen_random_uuid() como default das PKs e o H2 não tem essa função.
+    init-sqls:
+      - CREATE ALIAS IF NOT EXISTS gen_random_uuid FOR 'java.util.UUID.randomUUID'

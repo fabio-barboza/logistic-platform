@@ -20,7 +20,10 @@ spring:
         format_sql: true
   flyway:
     enabled: true
-    locations: classpath:db/migration
+    # Duas pastas: db/migration é schema puro e roda também nos testes (H2); db/roles tem a V2,
+    # que cria a role logistic_ro com CREATE ROLE/GRANT — sintaxe que só existe no Postgres.
+    # Separar por pasta é o que deixa o H2 aplicar as migrations de schema sem tropeçar na V2.
+    locations: classpath:db/migration,classpath:db/roles
   ai:
     mcp:
       server:

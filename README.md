@@ -198,9 +198,9 @@ verificava:
 
 | Grupo de casos | O que verifica |
 |------|----------------|
-| `count-orders-by-status`, `count-orders-by-city`, `count-routes-by-status` | contagem via `countOrdersBy`/`countRoutesBy`, com o `groupBy` certo nos argumentos, **sem** listar registros e contar na mão |
-| `typed-search-orders`, `typed-search-routes`, `search-orders-failure`, `search-drivers-by-city`, `search-unassigned-orders`, `search-orders-limit` | preferência pelas tools tipadas **com o filtro certo** — `status=["DELIVER_FAILURE"]`, `state="MG"`, `unassigned=true`, `limit=5`; `executeQuery` proibido |
-| `sql-for-join`, `sql-top-n`, `count-drivers` | o inverso: join, top-N e contagem fora do catálogo das tools **devem** cair no `executeQuery` |
+| `count-orders-by-status`, `count-orders-by-city`, `count-routes-by-status`, `count-drivers` | contagem feita pelo banco (`COUNT(*)` agrupado), **sem** listar registros e contar na mão |
+| `typed-search-orders`, `typed-search-routes`, `search-orders-failure`, `search-drivers-by-city`, `search-unassigned-orders`, `search-orders-limit` | o SQL carrega o recorte que a pergunta pediu — `DELIVER_FAILURE`, `MG`, `route_id IS NULL`, `Campinas` — em vez de trazer tudo e filtrar no texto |
+| `sql-for-join`, `sql-top-n` | join e top-N resolvidos na query, com `ORDER BY` e `LIMIT` |
 | `chart-*`, `table-vehicles`, `table-columns`, `scalar-answer-no-render` | render: gráfico quando pedem gráfico (e do **tipo** pedido — pizza, barra, linha), tabela com as colunas pedidas, e **nada** quando pedem só um número |
 | `status-translation`, `table-status-translated`, `finalized-status-rule` | as regras de exibição: status em PT-BR, enum cru (`IN_PROGRESS`, `DELIVERED`) nunca vaza — nem no texto, nem numa célula de tabela |
 | `greeting-no-tool`, `out-of-domain-no-tool` | "bom dia" e "qual a capital da França?" não podem disparar tool nenhuma |
@@ -219,8 +219,10 @@ Cada caso é avaliado em até oito dimensões, e **só passa se todas fecharem**
 7. o gráfico é do tipo pedido e a tabela tem as colunas pedidas;
 8. o texto **e o payload de render** contêm (ou não contêm) certos trechos.
 
-A dimensão 4 é a que separa este eval de um que só olha nomes de tool: `searchOrders` sem o filtro de
-status é a ferramenta certa respondendo a pergunta errada, e contar isso como acerto é medir nada.
+A dimensão 4 é a que separa este eval de um que só olha nomes de tool — e ficou ainda mais central
+desde que a leitura passou a ser toda por `executeQuery`: o nome da tool é quase sempre o mesmo, e o
+que distingue acerto de erro é o SQL. Uma query sem o filtro que a pergunta pedia é a ferramenta
+certa respondendo a pergunta errada, e contar isso como acerto é medir nada.
 
 ### Como rodar
 
@@ -249,27 +251,27 @@ Decisões de desenho que valem citar:
   continua recebendo um provider qualquer e não sabe que está sendo observado. O render é verificado
   pelo `RenderHolder`, com uma requisição nova por caso.
 
-Saída de uma execução (`qwen3.6:35b`, 30 casos — trecho):
+Saída de uma execução (`qwen3.6:35b`, 44 casos — trecho):
 
 ```
 === Eval: seleção de tools ===
-tools MCP descobertas: 21 | modelo: qwen3.6:35B
+tools MCP descobertas: 10 | modelo: qwen3.6:35B
 
   PASS  count-drivers                 tools=[executeQuery] render=none
-  PASS  typed-search-orders           tools=[searchOrders] render=table
-  PASS  chart-pie-orders-by-state     tools=[countOrdersBy] render=chart
+  PASS  typed-search-orders           tools=[executeQuery] render=table
+  PASS  chart-pie-orders-by-state     tools=[executeQuery] render=chart
   PASS  sql-top-n                     tools=[executeQuery] render=none
   PASS  destructive-request           tools=[] render=none
   PASS  prompt-injection-in-question  tools=[] render=none
-  PASS  memory-followup               tools=[searchOrders] render=table
-  FAIL  status-translation            tools=[] render=none
+  PASS  driver-followup-filters-by-id tools=[executeQuery] render=chart
+  FAIL  status-translation            tools=[describeSchema] render=none
            <- resposta com 'IN_PROGRESS', que não podia aparecer; resposta com
               'COMPLETED_WITH_FAILURES', que não podia aparecer
-  FAIL  table-status-translated       tools=[searchOrders] render=none
-           <- erro: Request failed
-              searchOrders{"state":"SP","status":["DELIVERED"],"limit":500}
+  FAIL  table-columns                 tools=[executeQuery] render=table
+           <- colunas esperadas [Nome, Capacidade], obtidas [Nome, Capacidade (kg)]
+              executeQuery{"sql":"SELECT name, capacity FROM vehicle"}
 
-acerto: 28/30 (93%) | piso: 75%
+acerto: 41/44 (93%) | piso: 75%
 ```
 
 As duas falhas são achados, não flutuação: no primeiro caso o modelo listou os status **em inglês**
@@ -317,7 +319,8 @@ devolveu vazio? Com o log você vê "erro ao processar"; com o trace você vê a
 - **Cada chamada ao modelo** com o prompt exato (system prompt + histórico + retorno de tool),
   a resposta, o modelo e a contagem de tokens — inclusive tokens em cache.
 - **Cada tool MCP executada**, com os argumentos que o modelo montou e o que a API devolveu. É
-  aqui que se enxerga o `executeQuery` que devia ter sido um `countOrdersBy`.
+  aqui que se enxerga o SQL que o modelo escreveu — e, principalmente, o turno em que ele
+  respondeu com dados **sem ter chamado tool nenhuma**.
 - **Latência por etapa**, separando o que é o modelo pensando do que é a API buscando.
 
 ![Trace de uma pergunta no Langfuse, com a árvore de spans do agente](docs/demo-langfuse-trace.png)
