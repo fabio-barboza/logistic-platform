@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 
 $RootDir      = Split-Path -Parent $MyInvocation.MyCommand.Path
 $LogDir       = Join-Path $RootDir 'logs'
-$ComposeFile  = Join-Path $RootDir 'logistic-api\docker-compose.yaml'
+$ComposeFile  = Join-Path $RootDir 'docker-compose.yaml'
 $SeedFile     = Join-Path $RootDir 'logistic-api\src\main\resources\db\seed\dados.sql'
 $DbContainer  = 'logisticdb'
 
@@ -191,12 +191,13 @@ function Test-Ports {
 }
 
 function Test-Llm {
+    $url = if ($env:LLM_BASE_URL) { $env:LLM_BASE_URL } else { $LlmUrl }
     try {
-        Invoke-WebRequest -Uri "$LlmUrl/v1/models" -TimeoutSec 3 -UseBasicParsing | Out-Null
-        Write-Info "LLM respondendo em $LlmUrl"
+        Invoke-WebRequest -Uri "$url/v1/models" -TimeoutSec 3 -UseBasicParsing | Out-Null
+        Write-Info "LLM respondendo em $url"
     }
     catch {
-        Write-Warn "LLM não respondeu em $LlmUrl — a stack sobe, mas o chat vai falhar até o modelo estar no ar."
+        Write-Warn "LLM não respondeu em $url — a stack sobe, mas o chat vai falhar até o modelo estar no ar."
     }
 }
 
@@ -387,11 +388,14 @@ function Start-Postgres {
     }
 }
 
-# Carrega o logistic-agent\.env (gitignored) e deriva o LANGFUSE_AUTH usado pelo agent para
-# exportar traces OTLP. Observabilidade é opcional: sem .env (ou com LANGFUSE_ENABLED
-# diferente de true) o agent sobe sem tracing nenhum.
+# Carrega o .env da raiz (gitignored) — LLM_*/VITE_* pros respectivos apps, e deriva o
+# LANGFUSE_AUTH usado pelo agent para exportar traces OTLP. Observabilidade é opcional: sem
+# .env (ou com LANGFUSE_CLIENT_ENABLED diferente de true) o agent sobe sem tracing nenhum.
+# LANGFUSE_CLIENT_ENABLED é independente do LANGFUSE_SERVER_ENABLED (esse último só decide
+# se os containers do Langfuse sobem via COMPOSE_PROFILES) — dá pra ter um Langfuse rodando
+# em outra máquina e só o client ligado.
 function Import-DotEnv {
-    $envFile = Join-Path $RootDir 'logistic-agent\.env'
+    $envFile = Join-Path $RootDir '.env'
     if (Test-Path $envFile) {
         foreach ($line in Get-Content $envFile) {
             $trimmed = $line.Trim()
@@ -400,12 +404,18 @@ function Import-DotEnv {
             if ($pair.Count -ne 2) { continue }
             $name  = $pair[0].Trim()
             $value = $pair[1].Trim().Trim('"').Trim("'")
+            # Linhas com ${...} (ex.: COMPOSE_PROFILES) são expansão de shell — só o bash do
+            # start.sh e o parser nativo do próprio Docker Compose entendem essa sintaxe. Se
+            # setássemos o texto literal aqui, ele entraria no ambiente do processo e o
+            # Compose passaria a priorizar esse valor quebrado em vez de resolver o .env
+            # sozinho (env do processo tem precedência sobre .env no Compose).
+            if ($value -match '\$\{') { continue }
             [Environment]::SetEnvironmentVariable($name, $value, 'Process')
         }
     }
 
-    if ($env:LANGFUSE_ENABLED -ne 'true') {
-        Write-Info 'Langfuse: desligado (LANGFUSE_ENABLED != true em logistic-agent\.env)'
+    if ($env:LANGFUSE_CLIENT_ENABLED -ne 'true') {
+        Write-Info 'Langfuse: desligado (LANGFUSE_CLIENT_ENABLED != true em .env)'
         return
     }
 
@@ -421,7 +431,7 @@ function Import-DotEnv {
         Write-Info "Langfuse: traces do agent vão para $baseUrl"
     }
     else {
-        Write-Warn 'Langfuse ligado sem LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY em logistic-agent\.env — o export vai falhar'
+        Write-Warn 'Langfuse ligado sem LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY em .env — o export vai falhar'
     }
 }
 
@@ -614,8 +624,8 @@ try {
     Test-Flags
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 
+    Import-DotEnv
     Test-Prereqs
-Import-DotEnv
     Invoke-BuildAll
     Start-Postgres
     Start-Api

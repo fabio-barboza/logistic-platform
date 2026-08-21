@@ -7,9 +7,9 @@ set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$ROOT_DIR/logs"
-COMPOSE_FILE="$ROOT_DIR/logistic-api/docker-compose.yaml"
+COMPOSE_FILE="$ROOT_DIR/docker-compose.yaml"
 SEED_FILE="$ROOT_DIR/logistic-api/src/main/resources/db/seed/dados.sql"
-AGENT_ENV_FILE="$ROOT_DIR/logistic-agent/.env"
+ENV_FILE="$ROOT_DIR/.env"
 DB_CONTAINER="logisticdb"
 
 API_PORT=8081
@@ -186,10 +186,11 @@ check_ports() {
 }
 
 check_llm() {
-    if curl -s -o /dev/null --max-time 3 "$LLM_URL/v1/models"; then
-        info "LLM respondendo em $LLM_URL"
+    local url="${LLM_BASE_URL:-$LLM_URL}"
+    if curl -s -o /dev/null --max-time 3 "$url/v1/models"; then
+        info "LLM respondendo em $url"
     else
-        warn "LLM não respondeu em $LLM_URL — a stack sobe, mas o chat vai falhar até o modelo estar no ar."
+        warn "LLM não respondeu em $url — a stack sobe, mas o chat vai falhar até o modelo estar no ar."
     fi
 }
 
@@ -348,19 +349,22 @@ start_postgres() {
 
 # O 'exec' faz o java substituir o subshell, então $! é o PID do próprio java —
 # sem isso o TERM iria para o subshell e deixaria o java órfão.
-# Carrega o logistic-agent/.env (gitignored) e deriva o LANGFUSE_AUTH usado pelo agent para
-# exportar traces OTLP. Observabilidade é opcional: sem .env (ou com LANGFUSE_ENABLED
-# diferente de true) o agent sobe sem tracing nenhum.
+# Carrega o .env da raiz (gitignored) — LLM_*/VITE_* pros respectivos apps, e deriva o
+# LANGFUSE_AUTH usado pelo agent pra exportar traces OTLP. Observabilidade é opcional: sem
+# .env (ou com LANGFUSE_CLIENT_ENABLED diferente de true) o agent sobe sem tracing nenhum.
+# LANGFUSE_CLIENT_ENABLED é independente do LANGFUSE_SERVER_ENABLED (esse último só decide
+# se os containers do Langfuse sobem via COMPOSE_PROFILES) — dá pra ter um Langfuse rodando
+# em outra máquina e só o client ligado.
 load_env() {
-    if [ -f "$AGENT_ENV_FILE" ]; then
+    if [ -f "$ENV_FILE" ]; then
         set -a
         # shellcheck disable=SC1091
-        . "$AGENT_ENV_FILE"
+        . "$ENV_FILE"
         set +a
     fi
 
-    if [ "${LANGFUSE_ENABLED:-false}" != "true" ]; then
-        info "Langfuse: desligado (LANGFUSE_ENABLED != true em logistic-agent/.env)"
+    if [ "${LANGFUSE_CLIENT_ENABLED:-false}" != "true" ]; then
+        info "Langfuse: desligado (LANGFUSE_CLIENT_ENABLED != true em .env)"
         return
     fi
 
@@ -372,7 +376,7 @@ load_env() {
     if [ -n "${LANGFUSE_AUTH:-}" ]; then
         info "Langfuse: traces do agent vão para ${LANGFUSE_BASE_URL:-http://localhost:8060}"
     else
-        warn "Langfuse ligado sem LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY em logistic-agent/.env — o export vai falhar"
+        warn "Langfuse ligado sem LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY em .env — o export vai falhar"
     fi
 }
 
@@ -559,8 +563,8 @@ main() {
 
     mkdir -p "$LOG_DIR"
 
-    check_prereqs
     load_env
+    check_prereqs
     build_all
     start_postgres
     start_api

@@ -93,7 +93,7 @@ logistic-api (Spring Boot :8081)
     │                  │
     │              Repository (Spring Data JPA)
     ▼
-PostgreSQL 18 :5432             ← docker compose + Flyway
+PostgreSQL 18 :5432             ← docker compose (raiz) + Flyway
 ```
 
 ### Decisões de arquitetura
@@ -355,7 +355,7 @@ Para debugar no IDE, sem os scripts:
 
 ```bash
 # 1. banco
-docker compose -f logistic-api/docker-compose.yaml up -d
+docker compose up -d
 
 # 2. api (Flyway cria o schema na subida)
 cd logistic-api && ./mvnw spring-boot:run
@@ -404,41 +404,54 @@ usuário fez. Rodar o eval com o Langfuse ligado dá as duas coisas — o veredi
 
 ### Como ligar
 
-1. Suba o Langfuse — compose próprio, à parte da stack da aplicação, e o `start.sh` não
-   encosta nele:
+Duas flags independentes no `.env` da raiz — servidor e cliente não precisam andar juntos:
+
+- `LANGFUSE_SERVER_ENABLED` — se `docker compose up` também sobe os containers do Langfuse
+  daqui.
+- `LANGFUSE_CLIENT_ENABLED` — se o `logistic-agent` exporta traces.
+
+Caso comum de usar só uma das duas: Langfuse já rodando em outra máquina — deixe
+`LANGFUSE_SERVER_ENABLED` desligado (não sobe container nenhum aqui) e
+`LANGFUSE_CLIENT_ENABLED` ligado, com `LANGFUSE_BASE_URL`/as chaves apontando pra lá.
+
+1. Suba o Langfuse — mesmo `docker-compose.yaml` da raiz, atrás do profile `langfuse`, à
+   parte da stack da aplicação, e o `start.sh` não encosta nele:
 
    ```bash
-   docker compose -f logistic-agent/docker-compose.yaml up -d
+   docker compose --profile langfuse up -d
    ```
 
-   A UI sobe em <http://localhost:8060>. Já tem um Langfuse rodando? Pule este passo e
-   aponte o `logistic-agent/.env` para ele.
-2. Copie o `.env.example` do agent — só isso:
+   A UI sobe em <http://localhost:8060>. Já tem um Langfuse rodando? Pule este passo (deixe
+   `LANGFUSE_SERVER_ENABLED` desligado no `.env`) e aponte o `LANGFUSE_BASE_URL`/as chaves
+   para ele.
+2. Copie o `.env.example` da raiz — só isso (é o mesmo arquivo que já controla LLM, webui e
+   o profile do Compose):
 
    ```bash
-   cp logistic-agent/.env.example logistic-agent/.env
+   cp .env.example .env
    ```
 
    O compose provisiona projeto, usuário e o par de chaves no primeiro boot, e o
    `.env.example` já vem com essas chaves. Login na UI: `admin@logistic.local` / `logistic123`.
    Usando um Langfuse que já existe? Troque pelas chaves do seu projeto
    (**Settings → API Keys**).
-3. `./start.sh` — ele lê o `logistic-agent/.env`, deriva o `LANGFUSE_AUTH` (base64 de
+3. `./start.sh` — ele lê o `.env` da raiz, deriva o `LANGFUSE_AUTH` (base64 de
    `public:secret`) e passa para o agent. Mande uma pergunta no chat e o trace aparece na UI
    em segundos.
 
-Para desligar de novo: `LANGFUSE_ENABLED=false` (ou apague o `logistic-agent/.env`). Nada mais
-muda. E para derrubar o Langfuse:
+Para desligar de novo: comente as linhas `LANGFUSE_SERVER_ENABLED`/`COMPOSE_PROFILES` (sobe
+containers) e/ou `LANGFUSE_CLIENT_ENABLED` (o agent para de exportar) do `.env` — ou apague o
+arquivo pra desligar os dois. E para derrubar o Langfuse:
 
 ```bash
-docker compose -f logistic-agent/docker-compose.yaml down     # mantém os traces
-docker compose -f logistic-agent/docker-compose.yaml down -v  # apaga os traces também
+docker compose --profile langfuse down     # mantém os traces
+docker compose --profile langfuse down -v  # apaga os traces também
 ```
 
 Subindo o agent na mão, exporte as duas variáveis antes:
 
 ```bash
-export LANGFUSE_ENABLED=true
+export LANGFUSE_CLIENT_ENABLED=true
 export LANGFUSE_AUTH=$(printf '%s:%s' "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" | base64 -w0)
 ```
 
@@ -500,7 +513,7 @@ Roteiro de demo e teste de fumaça, com o navegador em <http://localhost:5173>:
 >   (numa role read-only, mas ainda assim lê o banco inteiro);
 > - a role `logistic_ro` sobe com senha fixa no `V2__readonly_role.sql`, versionada no repositório;
 > - o Langfuse opcional segue a mesma linha: chaves de API, `ENCRYPTION_KEY` e senha de login
->   versionadas no `logistic-agent/docker-compose.yaml`, e os traces guardam prompt e resposta
+>   versionadas no `docker-compose.yaml` (profile `langfuse`), e os traces guardam prompt e resposta
 >   em claro;
 > - a escrita da LLM **passa por confirmação humana**, mas isso é guardrail de produto, não
 >   controle de acesso: quem chama a `logistic-api` direto na 8081 escreve sem passar por nenhum

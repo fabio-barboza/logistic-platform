@@ -19,8 +19,10 @@ rodando na 8080.
 |----------|--------|---------|
 | `VITE_API_URL` | `http://localhost:8080/api/chat` | Endpoint de chat do `logistic-agent` |
 
-Copie `.env.example` para `.env` e ajuste se o agent não estiver na 8080. O `.env` é
-gitignored; o `.env.example` é versionado.
+O `.env` é o da raiz do repo (`../.env`, copiado de `../.env.example`) — o Vite carrega de
+lá via `envDir` em `vite.config.js`, não daqui. Ajuste `VITE_API_URL` lá se o agent não
+estiver na 8080. Só variáveis prefixadas com `VITE_` chegam ao bundle do browser; o resto
+do `.env` (chaves do Langfuse etc.) fica de fora.
 
 ## Contrato com o agent
 

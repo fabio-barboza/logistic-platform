@@ -5,11 +5,11 @@ spring:
     name: logistic-agent
   ai:
     openai:
-      base-url: http://localhost:8200
+      base-url: ${LLM_BASE_URL:http://localhost:8200}
       api-key: not-needed
       chat:
         options:
-          model: qwen3.6:35B
+          model: ${LLM_MODEL:qwen3.6:35B}
           temperature: 0.7
           max-tokens: 16000
           # Desliga o reasoning do Qwen3.6. O llama-server sobe com --jinja e o template do modelo
@@ -39,10 +39,12 @@ spring:
 
 # Observabilidade opcional: traces OTLP para o Langfuse.
 # Desligado por padrão — quem roda a stack sem Langfuse não precisa fazer nada.
-# Para ligar: preencha o .env da raiz (LANGFUSE_ENABLED=true + as chaves do projeto) e
+# Para ligar: preencha o .env da raiz (LANGFUSE_CLIENT_ENABLED=true + as chaves do projeto) e
 # suba pelo start.sh, que deriva o LANGFUSE_AUTH = base64("public-key:secret-key").
+# Independente do LANGFUSE_SERVER_ENABLED (esse controla só os containers via Compose) — dá
+# pra apontar pra um Langfuse rodando em outra máquina sem subir nada localmente.
 langfuse:
-  enabled: ${LANGFUSE_ENABLED:false}
+  enabled: ${LANGFUSE_CLIENT_ENABLED:false}
 
 management:
   # O starter de OTel traz também o registry de métricas, que por padrão fica publicando

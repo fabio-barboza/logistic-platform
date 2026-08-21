@@ -12,8 +12,8 @@ Três apps independentes num só repo (não é multi-módulo Maven — cada um t
 | `logistic-agent/` | Java 21, Spring Boot 4.0.6, Spring AI 2.0.0 (MCP **client**) | 8080 |
 | `logistic-api/` | Java 21, Spring Boot 4.0.6, JPA, Flyway, MCP **server** | 8081 |
 
-Postgres 18 em 5432, via `logistic-api/docker-compose.yaml` (container `logisticdb`).
-LLM local OpenAI-compatível esperada em `http://localhost:8200` (`qwen3.6:35b`) — opcional para subir a stack, obrigatória para o chat responder.
+Postgres 18 em 5432, via `docker-compose.yaml` na raiz (container `logisticdb`, serviço `postgres` sem profile — sobe por padrão).
+LLM local OpenAI-compatível esperada em `http://localhost:8200` (`qwen3.6:35b`) — opcional para subir a stack, obrigatória para o chat responder. Esses dois valores são o default em `application.yml` (`${LLM_BASE_URL:...}`/`${LLM_MODEL:...}`); no `.env` da raiz (gitignored, carregado pelo `start.sh`) dá para sobrescrever para outra máquina/host sem rebuild depois da primeira vez.
 
 Regra estruturante: **a LLM nunca toca o banco.** Ela chama tools MCP expostas pela `logistic-api`; só a API executa SQL. O `logistic-agent` não tem datasource nem dependência de banco no `pom.xml` — se aparecer a necessidade de dados lá, a resposta é uma tool MCP nova na API, não um repositório no agent.
 
@@ -94,12 +94,16 @@ Camadas: `controller/` (REST) e `mcp/` (tools) são **dois adaptadores sobre o m
 - Sessão: o `main.js` gera um `sessionId` **novo a cada carregamento da página**. As mensagens vivem só no DOM e somem no F5, enquanto a `ChatMemory` do agent é indexada pelo `sessionId` e não some — reaproveitar o id fazia o modelo responder sobre uma conversa que já não estava na tela. Se um dia o histórico for persistido no `localStorage`, aí sim o id volta a ser reaproveitável.
 - `RenderableContent` é sealed + `@JsonTypeInfo(property = "type")`; o webui despacha por `renderData.type` (`chart`/`table`). Tipo novo = novo record permitido + `@JsonSubTypes` + branch no `main.js`.
 - Observabilidade (`LangfuseObservabilityConfig`): opcional, atrás da flag `langfuse.enabled`
-  (`LANGFUSE_ENABLED`, **default `false`**) — ela liga o `management.tracing.enabled` e é a condição
-  da própria `@Configuration`. Traces OTLP para o Langfuse (`http://localhost:8060`, stack comentada
-  em `logistic-agent/docker-compose.yaml`, subido à mão, fora do `start.sh`; provisiona projeto e
+  (`LANGFUSE_CLIENT_ENABLED`, **default `false`**) — ela liga o `management.tracing.enabled` e é a condição
+  da própria `@Configuration`. Independente do `LANGFUSE_SERVER_ENABLED`, que só controla se o
+  `docker-compose.yaml` da raiz sobe os containers do Langfuse (sob o profile `langfuse`,
+  `docker compose --profile langfuse up -d`) — dá pra ter o servidor rodando em outra máquina e
+  só o client (esta flag) ligado aqui. Traces OTLP para o Langfuse (`http://localhost:8060`, stack
+  subida à mão, fora do `start.sh`; provisiona projeto e
   chaves via `LANGFUSE_INIT_*`, e o `ENCRYPTION_KEY` precisa de aspas ou o YAML lê como número), autenticados pelo header `Basic ${LANGFUSE_AUTH}` — base64
-  de `public:secret`, derivado pelo `start.sh` a partir do `logistic-agent/.env` (mesma convenção do
-  `logistic-webui/.env`: `.env` ignorado, `.env.example` versionado). Prompt, resposta e argumentos/retorno de tool viram atributos de span via
+  de `public:secret`, derivado pelo `start.sh` a partir do `.env` da raiz — um arquivo só para LLM,
+  webui e Langfuse (`.env` ignorado, `.env.example` versionado); o Vite do webui lê o mesmo arquivo
+  via `envDir` em `vite.config.js`, expondo ao bundle só as chaves prefixadas `VITE_`. Prompt, resposta e argumentos/retorno de tool viram atributos de span via
   **`ObservationFilter`**, não `ObservationHandler`: no `onStop` do handler a span já foi encerrada pelo
   tracing e as tags se perdem. As propriedades `spring.ai.chat.observations.log-*` só escrevem no log da
   aplicação — não alimentam o Langfuse. O `ObservationPredicate` corta health checks por **dois**

@@ -1,25 +1,54 @@
-# Stack do Langfuse (v3) para a observabilidade do logistic-agent.
+# Stack local do logistic-platform, centralizada num arquivo só.
 #
-# Opcional e à parte: o start.sh NÃO sobe nada daqui. A stack da aplicação roda sem isso —
-# só não exporta trace. Para usar:
+# Postgres sobe por padrão, sem profile — é o banco da aplicação, usado pelo start.sh:
 #
-#   docker compose -f logistic-agent/docker-compose.yaml up -d
+#   docker compose up -d
+#
+# O Langfuse (observabilidade opcional do logistic-agent) fica atrás do profile "langfuse".
+# Duas formas de ligar:
+#
+#   1. Na linha de comando, uma vez:
+#        docker compose --profile langfuse up -d
+#
+#   2. De forma persistente, via .env na raiz (ver .env.example): com LANGFUSE_ENABLED=true
+#      lá, tanto `docker compose up -d` quanto `./start.sh` já sobem o Langfuse junto — o
+#      Compose lê o .env da raiz sozinho e ativa o profile via COMPOSE_PROFILES.
+#
 #   # UI em http://localhost:8060 → crie o projeto e um par de chaves em Settings → API Keys
-#   # preencha o .env da raiz (LANGFUSE_ENABLED=true + as chaves) e rode ./start.sh
+#   # preencha o logistic-agent/.env (LANGFUSE_ENABLED=true + as chaves) e rode ./start.sh
 #
-#   docker compose -f logistic-agent/docker-compose.yaml down     # derruba, mantém os dados
-#   docker compose -f logistic-agent/docker-compose.yaml down -v  # apaga os traces também
+#   docker compose --profile langfuse down     # derruba, mantém os dados
+#   docker compose --profile langfuse down -v  # apaga os traces também
 #
-# Já tem um Langfuse rodando? Ignore este arquivo e aponte o LANGFUSE_OTLP_ENDPOINT do .env
+# Já tem um Langfuse rodando? Ignore o profile e aponte o LANGFUSE_OTLP_ENDPOINT do .env
 # para ele.
 #
 # Senhas fixas de propósito: ambiente local, mesmo critério do resto da stack. Não exponha
 # em rede.
 services:
+  postgres:
+    image: postgres:18
+    container_name: logisticdb
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./logistic-api/infra/postgres:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=logisticdb
+      - PGDATA=/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d logisticdb" ]
+      interval: 5s
+      retries: 10
+
   langfuse-web:
     image: langfuse/langfuse:3
     container_name: langfuse-web
     restart: unless-stopped
+    profiles: [ "langfuse" ]
     depends_on:
       langfuse-postgres:
         condition: service_healthy
@@ -82,6 +111,7 @@ services:
     image: langfuse/langfuse-worker:3
     container_name: langfuse-worker
     restart: unless-stopped
+    profiles: [ "langfuse" ]
     depends_on:
       langfuse-postgres:
         condition: service_healthy
@@ -99,6 +129,7 @@ services:
     image: postgres:16
     container_name: langfuse-postgres
     restart: unless-stopped
+    profiles: [ "langfuse" ]
     environment:
       POSTGRES_USER: langfuse
       POSTGRES_PASSWORD: langfuse
@@ -115,6 +146,7 @@ services:
     image: clickhouse/clickhouse-server
     container_name: langfuse-clickhouse
     restart: unless-stopped
+    profiles: [ "langfuse" ]
     user: "101:101"
     environment:
       CLICKHOUSE_DB: default
@@ -134,6 +166,7 @@ services:
     image: redis:7
     container_name: langfuse-redis
     restart: unless-stopped
+    profiles: [ "langfuse" ]
     command: --requirepass myredissecret
     healthcheck:
       test: [ "CMD", "redis-cli", "-a", "myredissecret", "--no-auth-warning", "ping" ]
@@ -145,6 +178,7 @@ services:
     image: minio/minio
     container_name: langfuse-minio
     restart: unless-stopped
+    profiles: [ "langfuse" ]
     entrypoint: sh
     command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
     environment:
