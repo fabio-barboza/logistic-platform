@@ -11,6 +11,7 @@ Três apps independentes num só repo (não é multi-módulo Maven — cada um t
 | `logistic-webui/` | Vite 8, Chart.js 4, marked, JS puro (sem framework) | 5173 |
 | `logistic-agent/` | Java 21, Spring Boot 4.0.6, Spring AI 2.0.0 (MCP **client**) | 8080 |
 | `logistic-api/` | Java 21, Spring Boot 4.0.6, JPA, Flyway, MCP **server** | 8081 |
+| Keycloak (`quay.io/keycloak/keycloak:26.7`, realm `logistic`) | Autenticação/autorização OAuth2 | 8090 |
 
 Postgres 18 em 5432, via `docker-compose.yaml` na raiz (container `logisticdb`, serviço `postgres` sem profile — sobe por padrão).
 LLM local OpenAI-compatível esperada em `http://localhost:8200` (`qwen3.6:35b`) — opcional para subir a stack, obrigatória para o chat responder. Esses dois valores são o default em `application.yml` (`${LLM_BASE_URL:...}`/`${LLM_MODEL:...}`); no `.env` da raiz (gitignored, carregado pelo `start.sh`) dá para sobrescrever para outra máquina/host sem rebuild depois da primeira vez.
@@ -19,7 +20,7 @@ Regra estruturante: **a LLM nunca toca o banco.** Ela chama tools MCP expostas p
 
 ## Comandos
 
-Stack inteira (sobe Postgres → API → seed → agent → webui, na ordem, com espera entre etapas):
+Stack inteira (sobe Postgres → Keycloak (realm importado) → API → seed → agent → webui, na ordem, com espera entre etapas):
 
 ```bash
 ./start.sh              # Linux/macOS; Ctrl+C derruba tudo
@@ -85,13 +86,13 @@ Camadas: `controller/` (REST) e `mcp/` (tools) são **dois adaptadores sobre o m
   - **O aviso de "nada foi gravado ainda" é incondicional** (`ChatService.withPendingActionNotice`) enquanto houver pendência. O modelo escreve "cadastrado com sucesso" diante de qualquer retorno positivo, e procurar essa afirmação na resposta é heurística perdida — há infinitas formas de dizer que fez.
   - **Uma escrita por resposta.** A segunda chamada de escrita é recusada; a repetição da **mesma** chamada devolve a **mesma** pendência, com cara de sucesso. É o retorno de sucesso que encerra o loop de tool calls (a armadilha das 182 recusas do render), e aqui não dá para "ceder e executar" no teto — ceder é o que a confirmação existe para impedir.
   - O desfecho (confirmado/cancelado/falhou) entra na `ChatMemory` da sessão, porque o modelo não participa desse passo e sem isso o turno seguinte responderia sobre uma ação eternamente pendente. O `PendingActionStore` consome a pendência **uma vez** (dois cliques = duas escritas, e nenhuma tool da API é idempotente), com TTL de 15min e teto de 200.
-  - **Não é autorização.** A stack segue sem autenticação e quem chama a API em 8081 direto grava sem passar por aqui — o que isto impede é a LLM gravando por conta própria a partir de uma frase ambígua.
+  - **Não é autorização.** É um gate de UX para a LLM, não controle de acesso — a autenticação de verdade é a do Keycloak (ver seção *Segurança*), que continua valendo por baixo: quem chama a API em 8081 direto ainda precisa de um token com a role certa, e um usuário com `write` que confirmasse fora da tela também passaria. O que isto impede é a LLM gravando por conta própria a partir de uma frase ambígua, não uma pessoa autorizada.
   - Fora de requisição HTTP não há holder e a escrita executa direto (log em WARN). Isso vale para contexto sem servlet; o eval **tem** `MockHttpServletRequest`, então lá a escrita também vira pendência — por isso o recorder do eval passou a ser `ObservationHandler` (`EvalTestConfig`) em vez de decorator de `ToolCallbackProvider`: por dentro da confirmação, um decorator nunca seria chamado e o eval veria "nenhuma tool chamada".
 - **Leitura é só `executeQuery`.** Das 12 tools, uma lê (`executeQuery`), uma descreve o schema (`describeSchema`) e dez escrevem (create/update/link/assign/**delete**). Não existem tools tipadas de busca ou contagem: elas foram removidas porque `executeQuery` já respondia tudo que elas respondiam, e a sobreposição fazia o modelo escolher errado — um terço do `tool-selection.json` existia só para policiar essa escolha. E porque elas *não* alcançavam perguntas compostas: "o motorista com mais falhas por estado" é argmax por grupo, que nenhuma delas expressa e que o modelo, sem caminho de tool, respondia inventando dados. Autorização por linha (usuário que vê um estado e não outro) fica com RLS no Postgres, não com filtro em parâmetro de tool.
 - **Exclusão existe só para motorista e veículo** (`deleteDriver`, `deleteVehicle`), sempre por id — o modelo consulta com `executeQuery` e usa o id retornado; a descrição da tool proíbe UUID inventado. Pedido e rota continuam sem exclusão, e `executeQuery` só aceita SELECT: aí o system prompt segue mandando dizer que não é suportado, porque sem a instrução o modelo inventava motivo ("veículo vinculado a motoristas") para uma operação que não existe. Regras que moram no service, não no prompt: motorista **com rotas** é recusado com `ConflictException` (a FK `route→driver` é `ON DELETE RESTRICT`, e deixar o banco estourar devolveria erro de constraint no lugar de explicação), e o `DeletionSummary` conta os vínculos `driver_vehicle` que caíram por `CASCADE` — exclusão que apaga três vínculos em silêncio é o efeito colateral que o usuário precisa ver. Human in the loop vem de graça: o `ConfirmingToolCallbackProvider` classifica por exclusão, então `delete*` nasceu confirmada sem tocar no agent; o `PendingActionMapper` só marca `destructive` (derivado do prefixo `delete`) para o webui pintar o card e o botão de vermelho e escrever "Excluir". E o card de exclusão mostra o **registro**, não o UUID: o `DeletionTargetLookup` roda um SELECT fixo pela própria tool `executeQuery` (chamada pelo agent, sem LLM no meio) e guarda os campos no `PendingAction.details`. Confirmar um UUID não é conferir nada — ainda mais com `driver.name` não sendo único, onde o modelo pode ter escolhido o homônimo errado. Id que não existe (UUID inventado, registro já removido) é **recusado antes do card**, com instrução de consultar primeiro: a alternativa era o usuário clicar em confirmar e só então receber "não encontrado".
 - Eval (`./mvnw test -Peval` no agent, exige API e LLM no ar): o dataset inteiro custa caro — cada caso é ao menos uma ida à LLM, em série, e os com `setup` são duas. Ao mexer numa regra, rode o recorte: `-Deval.cases=driver-followup-filters-by-id,driver-failures-ignore-route-status`. O piso (`-Deval.threshold`) passa a valer sobre o subconjunto, então recorte é para iterar, não para aprovar mudança.
 - Antes de escrever regra nova no system prompt, pergunte se o código pode garantir aquilo. Limite de payload é teto no `QueryService`, não pedido ao modelo; argumento de render inválido é validação na tool, não instrução. O prompt fica com o que só ele carrega: fatos do domínio (tradução de status, ausência de exclusão, leitura só por `executeQuery`) e comportamento que nenhum código alcança (não confirmar ação sem retorno de tool). E o que ficar precisa de caso no `tool-selection.json` — regra de prompt sem eval é regra que ninguém percebe quando para de valer, ainda mais depois de trocar de modelo.
-- Sessão: o `main.js` gera um `sessionId` **novo a cada carregamento da página**. As mensagens vivem só no DOM e somem no F5, enquanto a `ChatMemory` do agent é indexada pelo `sessionId` e não some — reaproveitar o id fazia o modelo responder sobre uma conversa que já não estava na tela. Se um dia o histórico for persistido no `localStorage`, aí sim o id volta a ser reaproveitável.
+- Sessão: o `main.js` gera um `sessionId` **novo a cada carregamento da página**. As mensagens vivem só no DOM e somem no F5, enquanto a `ChatMemory` do agent não some — reaproveitar o id fazia o modelo responder sobre uma conversa que já não estava na tela. Desde a fase 5 a chave real da conversa não é o `sessionId` sozinho: é `AuthenticatedUser.conversationId(sessionId)`, que combina o `sub` do JWT autenticado com o `sessionId` recebido. Com autenticação, o `sessionId` deixou de ser exclusivo de quem o gerou — o webui não muda de sessionStorage por usuário, e nada impede alguém de forçar o mesmo valor de outra sessão —, então mandar o `sessionId` de outra pessoa não pode mais ler a conversa dela nem resgatar a pendência dela (`PendingActionStore`, `pendingVisualOffer`). Sem `sub` (fora de requisição HTTP autenticada), a chave cai para o `sessionId` cru — hoje só acontece antes do eval se autenticar, ou em teste que não monta `SecurityContext`. Se um dia o histórico for persistido no `localStorage`, o `sessionId` volta a ser reaproveitável entre cargas de página, mas o isolamento por usuário continua valendo do mesmo jeito.
 - `RenderableContent` é sealed + `@JsonTypeInfo(property = "type")`; o webui despacha por `renderData.type` (`chart`/`table`). Tipo novo = novo record permitido + `@JsonSubTypes` + branch no `main.js`.
 - Observabilidade (`LangfuseObservabilityConfig`): opcional, atrás da flag `langfuse.enabled`
   (`LANGFUSE_CLIENT_ENABLED`, **default `false`**) — ela liga o `management.tracing.enabled` e é a condição
@@ -126,4 +127,153 @@ Camadas: `controller/` (REST) e `mcp/` (tools) são **dois adaptadores sobre o m
 
 ## Segurança
 
-A stack é local e sem autenticação por desenho: API aberta em 8081, Postgres com `postgres/postgres` e porta publicada, MCP server sem token com `executeQuery` livre, senha da role `logistic_ro` fixa e versionada. Não exponha em rede; não trate esses pontos como bugs a "corrigir" sem o usuário pedir.
+Autenticação e autorização via Keycloak (`infra/keycloak/import/logistic-realm.json`, importado no
+primeiro boot do container — mudou o JSON depois de o Keycloak já ter subido? `docker compose down -v`
+e suba de novo, ou edite pela UI: `--import-realm` só lê o volume na primeira vez). Quatro usuários,
+senha igual ao username: `admin` (role `admin`), `user1` (`chat, read, write`), `user2` (`chat, read`),
+`eval-user` (`admin`, usado só pelo arnês do eval — ver mais abaixo). `admin` é role **composta**
+(`chat`+`read`+`write`) — é por isso que nenhuma regra em Java menciona `"admin"`: o Keycloak já expande
+a composta em `realm_access.roles` no token, e quem tem `admin` passa em qualquer `hasRole` sem código
+extra.
+
+Postgres (`postgres/postgres`) e a role `logistic_ro` continuam com senha fixa e versionada — ambiente
+local, não exponha em rede. O que mudou é o resto: as três aplicações exigem token, e `executeQuery`
+não é mais alcançável sem ele.
+
+**Fluxo de tokens:**
+
+```
+                    Keycloak (:8090, realm logistic)
+                          ^        ^
+       Authorization Code |        | Token Exchange (RFC 8693)
+             + PKCE       |        |
+                          |        |
+  browser ---Bearer(aud=logistic-agent)---> logistic-agent (:8080)
+  (webui :5173)                                    |
+                                                    |  Bearer(aud=logistic-api)
+                                                    v
+                                             logistic-api (:8081)
+                                               REST + /mcp
+```
+
+`logistic-webui` é SPA pública com PKCE (`src/auth.js`, ~300 linhas, sem lib — decisão de escopo, a
+alternativa aceitável se isso ficar caro é `oidc-client-ts`). `logistic-agent` é confidencial: resource
+server do token do browser **e** cliente OAuth que troca esse token por um com `aud=logistic-api`
+(`TokenExchangeService`, RFC 8693) antes de chamar o `/mcp` da API. `logistic-api` é resource server
+puro, sem login nenhum.
+
+- **Por que token exchange, e não repassar o token do browser para o `/mcp`.** A spec de autorização
+  do MCP é normativa: *"MCP servers MUST NOT accept or transit any other tokens"* — repassar o token
+  com `aud=logistic-agent` para a API seria *token passthrough*, o vetor do confused deputy. O agent
+  troca o token do usuário por um com `aud=logistic-api`, preservando a identidade (`sub`) mas
+  restringindo a audiência. `TokenExchangeService` documenta uma pegadinha de configuração: o Keycloak
+  só coloca `logistic-api` no `aud` do token trocado se o client **requisitante** (`logistic-agent`)
+  tiver o protocol mapper de audiência — não o alvo (`logistic-api`). O mesmo vale para qualquer client
+  novo que precise de um token com audiência específica, incluindo o `logistic-eval` do arnês do eval
+  (ver mais abaixo): sem o mapper, o Keycloak não inclui `aud` nenhum por padrão (não existe default),
+  e o `JwtDecoder`, que exige `aud=logistic-agent`, rejeita antes de qualquer coisa rodar.
+
+- **Por que a autorização das tools MCP usa `McpTransportContext` como parâmetro do método, e não
+  `@PreAuthorize`.** Verificado no bytecode do `mcp-core-2.0.0`:
+  `McpServerFeatures$AsyncToolSpecification` roda a tool com
+  `Mono.fromCallable(...).subscribeOn(Schedulers.boundedElastic())` — numa thread do pool, não na
+  thread do servlet. O `SecurityContextHolder`, que é `ThreadLocal`, está vazio ali: `@PreAuthorize`
+  negaria **tudo**, inclusive para o `admin`, e a falha não aparece em teste de service nem em
+  `@WebMvcTest` — só com a stack de pé. `McpTransportContext` viaja pelo Reactor Context, que não
+  depende de thread, e por isso funciona: um extractor
+  (`McpTransportConfig.mcpAuthContextExtractor`, na API) copia o header `Authorization` para o
+  contexto de transporte na entrada da requisição HTTP, e `McpAuthorization.require(ctx, "write")` lê
+  esse header dentro da tool, decodifica com o `JwtDecoder` já configurado (o mesmo validador de
+  `aud=logistic-api` — é essa validação que impede passthrough) e confere a role. A auto-config do
+  Spring AI (`McpServerStreamableHttpWebMvcAutoConfiguration`) não aceita um `McpTransportContextExtractor`
+  externo, então `McpTransportConfig` reconstrói o `WebMvcStreamableServerTransportProvider` à mão
+  (mesmos `jsonMapper`/`mcpEndpoint`/`keepAliveInterval`/`disallowDelete` que a auto-config usaria) só
+  para plugar o extractor — ela declara o bean dela com `@ConditionalOnMissingBean`, então este a
+  substitui sem precisar excluí-la.
+  `Hooks.enableAutomaticContextPropagation()` foi considerado e descartado: funcionaria
+  (`spring-security-core` registra o accessor via `META-INF/services`), mas é uma linha global e
+  mágica — o parâmetro explícito é legível e testável sem subir stack nenhuma.
+
+- **`McpTransportContext` não aparece no `inputSchema` da tool** (verificado em `tools/list` contra a
+  API real: `deleteDriver` continua só com `id`) — o `McpJsonSchemaGenerator` exclui explicitamente
+  esse tipo (e `McpSyncRequestContext`/`McpAsyncRequestContext`/`McpMeta`) do schema gerado. Não é
+  prompt, o modelo nunca tenta preenchê-lo, e por isso o parâmetro pôde entrar em todas as 12 tools
+  sem mexer numa descrição sequer.
+
+- **A recusa de permissão NÃO vira HTTP 403.** Era o plano original, mas verificado com `curl` direto
+  no `/mcp` (sem nada no meio): o `WebMvcStreamableServerTransportProvider` despacha toda chamada de
+  tool — a recusa inclusive — via `ServerResponse.sse(consumer, Duration.ZERO)`, que já comitou HTTP
+  200 antes de a tool rodar. Uma exceção dentro da tool vira `CallToolResult.isError(true)`, entregue
+  como texto dentro do 200/SSE já aberto — nunca um status alternativo, não importa o que for lançado.
+  (O único ponto deste SDK que produz um status HTTP diferente é o `ServerTransportSecurityValidator`,
+  uma checagem de `Origin`/`Host` que roda **antes** de o corpo ser parseado — sem visibilidade de qual
+  tool está sendo chamada, não dá para checar role ali.) A solução: `McpAuthorizationException`
+  (`logistic-api`) grava um marcador estável (`insufficient_scope`) na mensagem; no `logistic-agent`, um
+  `ToolExecutionExceptionProcessor` customizado (`ChatClientConfig`, sobrescrevendo o
+  `@ConditionalOnMissingBean` padrão) procura esse marcador e só ali deixa a `ToolExecutionException`
+  propagar — todo o resto cai no comportamento padrão do Spring AI (erro vira texto de volta ao
+  modelo). Isso importa por um motivo específico deste repositório: só retorno de sucesso encerra o
+  loop de tool calls (ver a armadilha das 172 recusas idênticas de render, mais abaixo na seção do
+  agent) — se a recusa de permissão caísse no caminho padrão (texto ao modelo), o modelo determinístico
+  reenviaria a mesma chamada negada para sempre. `ChatService.respond` captura essa exceção específica
+  e devolve "Você não tem permissão para executar essa operação.", em vez de deixá-la virar um 500. As
+  requisições REST de verdade (`POST /api/chat/confirm` no agent, `/api/**` na API) **não** têm esse
+  problema — são endpoints HTTP normais atrás do `SecurityFilterChain`, e `user2` sem `write` recebe um
+  403 real ali, sem marcador nenhum envolvido.
+
+- **Por que `/mcp` é `permitAll`** nos dois `SecurityFilterChain` (agent e API): o agent faz o handshake
+  MCP (`initialize`/`tools/list`) no **startup**, fora de qualquer requisição HTTP e sem usuário nenhum.
+  Exigir autenticação ali faria o agent subir sem tools e o chat responder "erro ao processar"
+  (`McpServerUnavailableFailureAnalyzer`). A autorização de verdade mora dentro de cada tool
+  (`McpAuthorization.require`): sem token, o chamador é anônimo e toda tool nega — permitir a conexão
+  não é permitir a chamada.
+
+- **Timeout de 5 minutos é `SSO Session Idle` no Keycloak** (`ssoSessionIdleTimeout: 300` no realm),
+  **não** um timer em JavaScript — quem tem o token continua com ele até ele expirar, timer de cliente
+  é sugestão, não controle. A condição para o Keycloak realmente ver a sessão como ociosa:
+  `getToken()` (`auth.js`) só é chamado de dentro de `authenticatedFetch`, ou seja, só quando o usuário
+  faz alguma coisa — **nunca transforme isso num `setInterval` renovando sozinho**, porque aí o
+  Keycloak nunca veria ociosidade e a sessão ficaria logada para sempre. `accessTokenLifespan` é
+  **600s (10 min)**, não 5: o read timeout da LLM no agent é 300s
+  (`ChatClientConfig.LLM_READ_TIMEOUT`), e um token de 5 min expiraria no meio de uma resposta longa —
+  o agent não tem refresh token no modelo SPA para renovar sozinho no meio da chamada. Com 10 min >
+  300s, nada expira no meio. Preço aceito: um token já emitido continua válido até expirar, então há
+  até ~10 min de janela residual depois que o usuário parou (trade-off inerente de bearer token). O
+  timer de ociosidade do lado do cliente (`startIdleWatch`, `auth.js`) trata requisição em andamento
+  como atividade — senão uma pergunta de até 310s (`REQUEST_TIMEOUT_MS` no `main.js`) deslogaria quem
+  soltou o mouse enquanto a resposta ainda gerava.
+
+- **Filtro de tools por role no agent (fase 5) é UX, não autorização** — reduz a superfície de prompt
+  injection e evita o passeio de três telas (consultar → confirmar → 403 no clique) que `user2` fazia
+  antes para descobrir que não podia excluir nada, mas **não substitui** a checagem real, que é
+  `McpAuthorization` na API. Ver o javadoc de `ConfirmingToolCallbackProvider.allowed` — não remova a
+  checagem da API achando que o filtro do agent basta; o filtro só esconde a tool de um modelo
+  bem-comportado, e nada impede uma chamada direta ao `/mcp` sem passar pelo agent.
+
+- **Eval usa usuário de máquina, sem perfil que desligue a segurança.** O `ToolSelectionEvalTest`
+  injeta `ChatService` e chama direto — não passa pelo `SecurityFilterChain` do agent —, mas a chamada
+  ao `/mcp` continua real desde a fase 4. `EvalAuthentication` (`logistic-agent/src/test`) obtém um
+  token via *direct grant* no client `logistic-eval` (único com essa concessão habilitada, só para
+  isto) para o usuário `eval-user`, e instala um `JwtAuthenticationToken` no
+  `SecurityContextHolder` antes do teste — decodificado pelo **mesmo** `JwtDecoder` que valida
+  requisições reais, não um atalho paralelo. `eval-user` tem a role `admin`, então nenhum caso do
+  `tool-selection.json` perde tool por falta de permissão e o dataset não muda.
+  `EvalEnvironmentCondition` ganhou um terceiro `reachable()` para o Keycloak, mesmo padrão dos dois
+  que já existiam (API, LLM) — sem ele, a falha apareceria tarde, dentro da criação do `JwtDecoder`
+  (que resolve o issuer no boot do contexto Spring), com uma mensagem que não aponta a causa. **Não
+  existe, e não deve existir, um perfil `noauth`** que desligue a cadeia de segurança para o eval —
+  regra inviolável do plano desta fase.
+
+- **BFF como componente futuro, não decisão final.** A stack optou por SPA pública com PKCE em vez de
+  Backend for Frontend: o agent é ponte LLM↔MCP, e empilhar nele sessão de browser, cookie e CSRF
+  conflacionaria dois papéis. Consequência aceita **hoje**: o token de acesso fica no `sessionStorage`
+  do browser, exposto a XSS — mitigado por lifespan curto (10 min) e `revokeRefreshToken` com
+  `refreshTokenMaxReuse: 0` no realm (reuso do refresh token invalida a sessão). Num ecossistema com
+  múltiplos agents e múltiplas APIs, o BFF é peça própria na frente de todos, não um papel extra dentro
+  de um deles — é o desenho certo quando esse dia chegar, não um bug do desenho atual.
+
+- **Delta de vocabulário.** A spec de autorização do MCP fala em *scopes* OAuth; aqui usamos *realm
+  roles* do Keycloak (`read`/`write`) no lugar — mantém o vocabulário do domínio, que já aparecia em
+  toda a stack antes da autenticação existir. Registrado aqui porque é a única divergência
+  deliberada da spec (todo o resto — token exchange, audiência, "MUST NOT accept or transit any other
+  tokens" — segue a normativa à risca).
