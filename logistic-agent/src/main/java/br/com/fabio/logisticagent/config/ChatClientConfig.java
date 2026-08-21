@@ -1,5 +1,10 @@
 package br.com.fabio.logisticagent.config;
 
+import br.com.fabio.logisticagent.confirm.ConfirmingToolCallbackProvider;
+import br.com.fabio.logisticagent.confirm.DeletionTargetLookup;
+import br.com.fabio.logisticagent.confirm.PendingActionHolder;
+import br.com.fabio.logisticagent.confirm.PendingActionStore;
+import br.com.fabio.logisticagent.confirm.RequiredArgumentsCheck;
 import br.com.fabio.logisticagent.tool.RenderTool;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
@@ -9,6 +14,7 @@ import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.openai.http.okhttp.OpenAiHttpClientBuilderCustomizer;
 import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -40,11 +46,30 @@ public class ChatClientConfig {
             Nunca afirme que executou uma ação sem ter chamado a tool correspondente e recebido a
             resposta dela. "Cadastrado", "atualizado", "vinculado" só depois do retorno da tool.
 
-            Não existe nenhuma tool de remoção ou exclusão, e executeQuery só aceita SELECT. Se o
-            usuário pedir para remover, apagar ou deletar qualquer coisa, responda que a plataforma
-            não suporta exclusão — não invente um motivo (como vínculo com outro registro) nem diga
-            que "não foi possível". O mesmo vale para qualquer ação sem tool: diga que não é
-            suportado, em vez de justificar uma falha que não aconteceu.
+            Toda operação de escrita (cadastrar, atualizar, vincular) passa por confirmação do
+            usuário. Ao chamar a tool de escrita, ela NÃO executa: ela registra a ação e devolve
+            "Ação registrada e enviada para confirmação". A gravação só acontece quando o usuário
+            clicar em confirmar na tela. Nessa resposta, diga em uma frase o que será feito e que
+            está aguardando a confirmação — nunca diga que já foi cadastrado, atualizado ou
+            vinculado. Não chame a mesma tool de novo para "tentar de novo": a ação já está
+            registrada. Uma ação de escrita por resposta: se o usuário pedir várias, registre a
+            primeira e diga que as próximas vêm depois da confirmação. Exclusão é irreversível: ao
+            registrá-la, diga o que será excluído (nome e, quando houver, vínculos que caem junto).
+
+            Nunca peça a confirmação em texto ("deseja prosseguir?", "confirma?", "posso
+            excluir?"): quem pergunta é a tela. Com os dados obrigatórios em mãos, chame a tool —
+            é a chamada que faz aparecer o botão de confirmar. Perguntar no texto obriga o usuário
+            a confirmar duas vezes e, se ele responder "sim", você ainda vai precisar chamar a
+            tool. Pergunte apenas quando faltar um dado obrigatório. Falta um dado obrigatório?
+            Pergunte antes de chamar a tool, em vez de inventar valor.
+
+            Exclusão existe só para motorista (deleteDriver) e veículo (deleteVehicle), e sempre
+            pelo id: consulte antes com executeQuery pelo nome ou e-mail e use o id retornado —
+            nunca invente um UUID. Pedido e rota NÃO têm exclusão: se pedirem, diga que não é
+            suportado, sem inventar motivo (como vínculo com outro registro) e sem dizer que "não
+            foi possível". O mesmo vale para qualquer ação sem tool. executeQuery só aceita SELECT:
+            nunca tente apagar nada por SQL. Motorista com rotas não pode ser excluído — a API
+            recusa e diz quantas rotas existem; repasse isso ao usuário.
 
             Importante: para perguntas de "quantos" (contagem), nunca liste os registros e conte manualmente —
             isso erra em listas grandes. Use executeQuery com SELECT COUNT(*) e deixe o banco contar.
@@ -115,12 +140,22 @@ public class ChatClientConfig {
                 .build();
     }
 
+    /**
+     * As tools MCP com as de escrita já embrulhadas pela confirmação. É aqui, e não num
+     * {@code @Primary} sobre o bean do starter MCP, para o decorator do eval
+     * ({@code RecordingToolCallbackProvider}) continuar podendo substituir o provider real sem
+     * perder a confirmação — os dois se compõem, este por fora.
+     */
     @Bean
     ChatClient chatClient(ChatClient.Builder builder, ToolCallbackProvider mcpToolCallbacks,
-            RenderTool renderTool, ChatMemory chatMemory) {
+            RenderTool renderTool, ChatMemory chatMemory, PendingActionStore pendingActionStore,
+            RequiredArgumentsCheck requiredArguments, DeletionTargetLookup deletionTarget,
+            ObjectProvider<PendingActionHolder> pendingActionHolder) {
         return builder
                 .defaultSystem(SYSTEM_PROMPT)
-                .defaultToolCallbacks(mcpToolCallbacks)
+                .defaultToolCallbacks(new ConfirmingToolCallbackProvider(
+                        mcpToolCallbacks, pendingActionStore, requiredArguments, deletionTarget,
+                        pendingActionHolder))
                 .defaultTools(renderTool)
                 .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
                 .build();

@@ -6,7 +6,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Registra, em ordem, as tools MCP chamadas pelo modelo durante um caso de eval — nome e argumentos.
- * Preenchido pelo {@link RecordingToolCallbackProvider}, que embrulha o provider real.
+ * Preenchido pelo ObservationHandler do {@link EvalTestConfig}, que observa toda chamada de tool
+ * feita pelo Spring AI — inclusive as de escrita, que a confirmação intercepta antes de executar.
  */
 public class ToolCallRecorder {
 

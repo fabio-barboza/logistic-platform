@@ -14,6 +14,9 @@ import java.util.UUID;
 
 public interface RouteRepository extends JpaRepository<Route, UUID> {
 
+    /** Rotas do motorista. A FK route→driver é ON DELETE RESTRICT: com rota, o motorista não sai. */
+    long countByDriverId(UUID driverId);
+
     @Query("""
            SELECT r FROM Route r
            WHERE (:status IS NULL OR r.status IN :status)

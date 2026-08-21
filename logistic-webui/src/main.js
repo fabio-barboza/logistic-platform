@@ -4,6 +4,7 @@ import Chart from 'chart.js/auto'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api/chat'
 const HEALTH_URL = API_URL + '/health'
+const CONFIRM_URL = API_URL + '/confirm'
 // Um pouco acima do read timeout da LLM no agent (300s), para o erro do servidor chegar antes
 // de o cliente desistir. Sem isso o fetch fica pendurado indefinidamente.
 const REQUEST_TIMEOUT_MS = 310000
@@ -176,7 +177,7 @@ function addLoadingMessage() {
     return bubble
 }
 
-function addAssistantMessage(content, renderData) {
+function addAssistantMessage(content, renderData, pendingAction) {
     const bubble = assistantShell()
 
     if (content) {
@@ -205,6 +206,10 @@ function addAssistantMessage(content, renderData) {
         }
     }
 
+    if (pendingAction) {
+        bubble.appendChild(buildPendingAction(pendingAction))
+    }
+
     scrollChat()
 }
 
@@ -221,6 +226,83 @@ function addErrorMessage(text) {
     div.appendChild(bubble)
     chat.appendChild(div)
     scrollChat()
+}
+
+/* ---------- Confirmação de escrita (human in the loop) ---------- */
+
+// A escrita já está registrada no agent quando este card aparece: os botões só decidem se ela
+// roda ou é descartada. Os argumentos vêm prontos do backend justamente para o que o usuário lê
+// aqui ser o que vai ser executado.
+function buildPendingAction(pending) {
+    const card = document.createElement('div')
+    card.className = pending.destructive ? 'confirm-card danger' : 'confirm-card'
+
+    const title = document.createElement('p')
+    title.className = 'confirm-title'
+    title.textContent = pending.summary
+    card.appendChild(title)
+
+    const list = document.createElement('dl')
+    list.className = 'confirm-args'
+    Object.entries(pending.arguments ?? {}).forEach(([label, value]) => {
+        const dt = document.createElement('dt')
+        dt.textContent = label
+        const dd = document.createElement('dd')
+        dd.textContent = value
+        list.appendChild(dt)
+        list.appendChild(dd)
+    })
+    card.appendChild(list)
+
+    const actions = document.createElement('div')
+    actions.className = 'confirm-actions'
+
+    const confirmBtn = document.createElement('button')
+    confirmBtn.type = 'button'
+    // Exclusão não tem desfazer: o botão diz o que faz, em vez de um "Confirmar" genérico.
+    confirmBtn.className = pending.destructive ? 'confirm-btn danger' : 'confirm-btn primary'
+    confirmBtn.textContent = pending.destructive ? 'Excluir' : 'Confirmar'
+
+    const cancelBtn = document.createElement('button')
+    cancelBtn.type = 'button'
+    cancelBtn.className = 'confirm-btn'
+    cancelBtn.textContent = 'Cancelar'
+
+    const decide = async approved => {
+        // Desabilita antes do await: dois cliques seriam duas execuções, e o store do agent
+        // consome a pendência uma vez só — o segundo clique viraria "ação não encontrada".
+        confirmBtn.disabled = true
+        cancelBtn.disabled = true
+        const status = document.createElement('p')
+        status.className = 'confirm-status'
+        status.textContent = approved ? (pending.destructive ? 'Excluindo...' : 'Executando...') : 'Cancelando...'
+        card.appendChild(status)
+        try {
+            const response = await fetch(CONFIRM_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId, actionId: pending.id, approved }),
+            })
+            const data = await response.json()
+            status.remove()
+            card.dataset.resolved = approved ? 'confirmed' : 'canceled'
+            actions.remove()
+            addAssistantMessage(data.content, data.renderData, data.pendingAction)
+        } catch {
+            status.remove()
+            confirmBtn.disabled = false
+            cancelBtn.disabled = false
+            addErrorMessage('Não foi possível enviar a confirmação. Verifique se o logistic-agent está rodando (porta 8080).')
+        }
+    }
+
+    confirmBtn.addEventListener('click', () => decide(true))
+    cancelBtn.addEventListener('click', () => decide(false))
+
+    actions.appendChild(confirmBtn)
+    actions.appendChild(cancelBtn)
+    card.appendChild(actions)
+    return card
 }
 
 /* ---------- Render de gráfico ---------- */
@@ -436,7 +518,7 @@ async function sendText(raw) {
 
         const data = await response.json()
         loading.closest('.msg').remove()
-        addAssistantMessage(data.content, data.renderData)
+        addAssistantMessage(data.content, data.renderData, data.pendingAction)
     } catch (err) {
         loading.closest('.msg').remove()
         if (err.name === 'AbortError') {

@@ -1,6 +1,10 @@
 package br.com.fabio.logisticagent.service;
 
+import br.com.fabio.logisticagent.confirm.PendingAction;
+import br.com.fabio.logisticagent.confirm.PendingActionHolder;
+import br.com.fabio.logisticagent.confirm.PendingActionMapper;
 import br.com.fabio.logisticagent.dto.ChatMessageDTO;
+import br.com.fabio.logisticagent.dto.PendingActionDTO;
 import br.com.fabio.logisticagent.dto.render.RenderableContent;
 import br.com.fabio.logisticagent.tool.RenderHolder;
 import br.com.fabio.logisticagent.tool.ToolCallHolder;
@@ -82,6 +86,42 @@ public class ChatService {
             """);
 
     /**
+     * Resposta que afirma que uma escrita está registrada e à espera do usuário.
+     *
+     * <p>Deliberadamente restrito a frases que afirmam a <b>existência</b> da pendência. "Preciso
+     * do e-mail para registrar a ação" é o modelo pedindo dado, e está certo — não pode disparar
+     * retry. "Aguardando sua confirmação" sem pendência é a tela sem botão nenhum, com o usuário
+     * esperando por algo que nunca vai aparecer.
+     */
+    private static final Pattern ACTION_CLAIM = Pattern.compile(
+            "aguard\\w*\\s+(a\\s+|sua\\s+)?confirma|"
+                    + "a[çc][ãa]o\\s+(foi\\s+)?registrada|"
+                    + "ser[áa]\\s+(realizada|executada|efetivada|registrada)|"
+                    + "clique\\s+em\\s+confirmar|confirme\\s+(a\\s+a[çc][ãa]o|abaixo|para\\s+executar)",
+            Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Correções para a resposta que anuncia uma ação pendente sem ter chamado tool de escrita
+     * nenhuma. Mesmo formato do retry de render, e pelo mesmo motivo: o modelo responde de memória
+     * e afirma o que não fez — aqui o custo é o usuário esperando por um botão que não existe.
+     */
+    private static final List<String> ACTION_CORRECTIONS = List.of("""
+            Sua resposta anterior disse que a ação está registrada ou aguardando confirmação, mas
+            você não chamou nenhuma tool de escrita neste turno — nada foi registrado e o usuário
+            não recebeu botão nenhum na tela. Refaça agora: chame a tool de escrita correspondente
+            (createDriver, createVehicle, createOrder, createRoute, updateOrderStatus,
+            updateRouteStatus, linkDriverVehicle ou assignOrderToRoute) com os dados que o usuário
+            já forneceu nesta conversa. Se ainda faltar algum dado obrigatório, pergunte por ele em
+            vez de anunciar a ação.
+            """, """
+            Você continua anunciando a ação sem chamar a tool de escrita, e a tela do usuário segue
+            sem o botão de confirmar. Escrever a intenção em texto não registra nada. Nesta
+            resposta, chame a tool de escrita com os dados desta conversa e escreva no máximo uma
+            frase depois disso. Se não for possível, diga claramente que a ação NÃO foi registrada
+            e o que falta.
+            """);
+
+    /**
      * Resposta que contém dados: linha de tabela markdown, item de lista com número, ou qualquer
      * dígito solto. Usada junto com "nenhuma tool foi chamada" para detectar dado inventado — por
      * isso é ampla de propósito: um falso positivo custa um round-trip, um falso negativo entrega
@@ -113,13 +153,18 @@ public class ChatService {
     private final ChatClient chatClient;
     private final RenderHolder renderHolder;
     private final ToolCallHolder toolCallHolder;
+    private final PendingActionHolder pendingActionHolder;
+    private final PendingActionMapper pendingActionMapper;
     private final ObjectProvider<Tracer> tracerProvider;
 
     public ChatService(ChatClient chatClient, RenderHolder renderHolder, ToolCallHolder toolCallHolder,
+                       PendingActionHolder pendingActionHolder, PendingActionMapper pendingActionMapper,
                        ObjectProvider<Tracer> tracerProvider) {
         this.chatClient = chatClient;
         this.renderHolder = renderHolder;
         this.toolCallHolder = toolCallHolder;
+        this.pendingActionHolder = pendingActionHolder;
+        this.pendingActionMapper = pendingActionMapper;
         this.tracerProvider = tracerProvider;
     }
 
@@ -129,6 +174,8 @@ public class ChatService {
 
         boolean renderAllowed = renderAllowed(userMessage, sessionId);
         renderHolder.setRenderAllowed(renderAllowed);
+        // A tool de escrita só vê os argumentos que o modelo escreveu; o dono da pendência vem daqui.
+        pendingActionHolder.setSessionId(sessionId);
 
         String content = ask(userMessage, sessionId);
 
@@ -138,6 +185,15 @@ public class ChatService {
                 break;
             }
             log.info("Resposta anuncia visualização sem render; refazendo com correção. sessionId={}", sessionId);
+            content = ask(correction, sessionId);
+        }
+
+        for (String correction : ACTION_CORRECTIONS) {
+            if (pendingActionHolder.get() != null || !ACTION_CLAIM.matcher(nullToEmpty(content)).find()) {
+                break;
+            }
+            log.info("Resposta anuncia ação pendente sem chamar tool de escrita; refazendo com correção. "
+                    + "sessionId={}", sessionId);
             content = ask(correction, sessionId);
         }
 
@@ -154,8 +210,12 @@ public class ChatService {
 
         RenderableContent renderData = renderHolder.get();
         rememberVisualOffer(sessionId, content, renderData);
-        return new ChatMessageDTO("assistant",
-                withRenderFailureNotice(withoutDuplicatedTable(content, renderData), renderData), renderData);
+        PendingAction pending = pendingActionHolder.get();
+        String text = withPendingActionNotice(
+                withRenderFailureNotice(withoutDuplicatedTable(content, renderData), renderData), pending);
+        text = withUnregisteredActionNotice(text, pending);
+        PendingActionDTO pendingDto = pending == null ? null : pendingActionMapper.toDto(pending);
+        return new ChatMessageDTO("assistant", text, renderData, pendingDto);
     }
 
     /**
@@ -240,6 +300,38 @@ public class ChatService {
         return (text.isEmpty() ? "" : text + "\n\n")
                 + "> ⚠️ Nada foi renderizado nesta resposta: a visualização foi recusada. "
                 + error + " Peça de novo para eu refazer o gráfico ou a tabela.";
+    }
+
+    /**
+     * Aviso de que a escrita ainda não aconteceu, quando há ação pendente.
+     *
+     * <p>Incondicional de propósito: a alternativa era procurar na resposta uma afirmação de
+     * conclusão ("cadastrado", "pronto") e desmentir só nesses casos, mas o modelo tem infinitas
+     * formas de dizer que fez, e errar para o lado de calar deixa na tela a única frase que não
+     * pode estar lá. O texto do aviso é sempre verdadeiro enquanto existe pendência.
+     */
+    private String withPendingActionNotice(String content, PendingAction pending) {
+        if (pending == null) {
+            return content;
+        }
+        String text = content == null ? "" : content.strip();
+        return (text.isEmpty() ? "" : text + "\n\n")
+                + "> ⏳ Nada foi gravado ainda. Confira os dados abaixo e confirme para executar.";
+    }
+
+    /**
+     * Desmente a resposta que promete confirmação sem ter registrado nada — depois de o retry
+     * corretivo já ter falhado. Sem isto a tela mostra "aguardando sua confirmação" e nenhum
+     * botão, e o usuário fica esperando indefinidamente por uma ação que não existe.
+     */
+    private String withUnregisteredActionNotice(String content, PendingAction pending) {
+        if (pending != null || !ACTION_CLAIM.matcher(nullToEmpty(content)).find()) {
+            return content;
+        }
+        String text = nullToEmpty(content).strip();
+        return (text.isEmpty() ? "" : text + "\n\n")
+                + "> ⚠️ Nenhuma ação foi registrada e não há nada para confirmar. "
+                + "Peça a operação de novo, informando os dados necessários.";
     }
 
     /** Span raiz da requisição, ou null quando o tracing está desligado. */
