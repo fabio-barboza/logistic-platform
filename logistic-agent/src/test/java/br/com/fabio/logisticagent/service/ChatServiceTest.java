@@ -9,6 +9,7 @@ import br.com.fabio.logisticagent.dto.render.Dataset;
 import br.com.fabio.logisticagent.tool.RenderHolder;
 import br.com.fabio.logisticagent.tool.ToolCallHolder;
 import io.micrometer.tracing.Tracer;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.stubbing.Answer;
@@ -17,6 +18,9 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.execution.ToolExecutionException;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
@@ -58,6 +62,16 @@ class ChatServiceTest {
         ObjectProvider<Tracer> tracerProvider = mock(ObjectProvider.class);
         chatService = new ChatService(chatClient, renderHolder, toolCallHolder, pendingActionHolder,
                 new PendingActionMapper(JsonMapper.builder().build()), tracerProvider);
+    }
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
+
+    private void authenticateAs(String sub) {
+        Jwt jwt = Jwt.withTokenValue("token").header("alg", "none").subject(sub).build();
+        SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(jwt, List.of()));
     }
 
     @SuppressWarnings("unchecked")
@@ -258,6 +272,26 @@ class ChatServiceTest {
         whenLlmAnswers().thenAnswer(counting(invocation -> "Há 42 pedidos entregues em SP."));
         chatService.respond("quantos pedidos entregues em SP?", "sessao-1");
 
+        whenLlmAnswers().thenAnswer(counting(invocation -> {
+            assertThat(renderHolder.isRenderAllowed()).isFalse();
+            return "Certo.";
+        }));
+        chatService.respond("sim", "sessao-1");
+    }
+
+    /**
+     * Fase 5, item 2: a chave da oferta pendente é a conversa (sub + sessionId), não o sessionId
+     * cru. Sem isso, o "sim" de user-b resolveria a oferta feita a user-a só porque as duas abas
+     * mandam o mesmo sessionId (ex.: sessionStorage forçado, ou coincidência).
+     */
+    @Test
+    void pendingVisualOfferIsIsolatedByAuthenticatedUser() {
+        authenticateAs("user-a");
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "A taxa de falha em SP é 18,8%. Posso mostrar isso em gráfico, se quiser."));
+        chatService.respond("qual a taxa de falha por estado?", "sessao-1");
+
+        authenticateAs("user-b");
         whenLlmAnswers().thenAnswer(counting(invocation -> {
             assertThat(renderHolder.isRenderAllowed()).isFalse();
             return "Certo.";

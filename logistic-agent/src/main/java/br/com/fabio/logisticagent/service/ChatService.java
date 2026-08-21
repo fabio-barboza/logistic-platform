@@ -7,6 +7,7 @@ import br.com.fabio.logisticagent.dto.ChatMessageDTO;
 import br.com.fabio.logisticagent.dto.PendingActionDTO;
 import br.com.fabio.logisticagent.dto.render.RenderableContent;
 import br.com.fabio.logisticagent.config.ChatClientConfig;
+import br.com.fabio.logisticagent.security.AuthenticatedUser;
 import br.com.fabio.logisticagent.tool.RenderHolder;
 import br.com.fabio.logisticagent.tool.ToolCallHolder;
 import io.micrometer.tracing.Span;
@@ -149,7 +150,10 @@ public class ChatService {
             montar a consulta, diga isso ao usuário e não apresente dado nenhum.
             """);
 
-    /** Sessões em que a última resposta ofereceu uma visualização e o usuário ainda não respondeu. */
+    /**
+     * Conversas (ver {@link AuthenticatedUser#conversationId}, não sessionId cru) em que a última
+     * resposta ofereceu uma visualização e o usuário ainda não respondeu.
+     */
     private final Map<String, Boolean> pendingVisualOffer = new ConcurrentHashMap<>();
 
     private final ChatClient chatClient;
@@ -171,21 +175,26 @@ public class ChatService {
     }
 
     public ChatMessageDTO respond(String userMessage, String sessionId) {
+        // Isola a conversa por usuário autenticado: ver AuthenticatedUser.conversationId. Tudo que
+        // toca ChatMemory, a oferta de visualização pendente ou o PendingActionStore usa esta
+        // chave a partir daqui, nunca o sessionId cru — sessionId de outro usuário não pode
+        // resolver a conversa nem a pendência dele.
+        String conversationId = AuthenticatedUser.conversationId(sessionId);
         Span span = currentSpan();
-        tagRequest(span, userMessage, sessionId);
+        tagRequest(span, userMessage, conversationId);
 
-        boolean renderAllowed = renderAllowed(userMessage, sessionId);
+        boolean renderAllowed = renderAllowed(userMessage, conversationId);
         renderHolder.setRenderAllowed(renderAllowed);
         // A tool de escrita só vê os argumentos que o modelo escreveu; o dono da pendência vem daqui.
-        pendingActionHolder.setSessionId(sessionId);
+        pendingActionHolder.setSessionId(conversationId);
 
         try {
-            return respondOrThrow(userMessage, sessionId, span, renderAllowed);
+            return respondOrThrow(userMessage, conversationId, span, renderAllowed);
         } catch (ToolExecutionException e) {
             if (!isPermissionDenied(e)) {
                 throw e;
             }
-            log.warn("Chamada de tool recusada por falta de permissão. sessionId={}", sessionId, e);
+            log.warn("Chamada de tool recusada por falta de permissão. conversationId={}", conversationId, e);
             return new ChatMessageDTO("assistant", "Você não tem permissão para executar essa operação.", null, null);
         }
     }
@@ -197,16 +206,16 @@ public class ChatService {
         return message != null && message.contains(ChatClientConfig.PERMISSION_DENIED_MARKER);
     }
 
-    private ChatMessageDTO respondOrThrow(String userMessage, String sessionId, Span span, boolean renderAllowed) {
-        String content = ask(userMessage, sessionId);
+    private ChatMessageDTO respondOrThrow(String userMessage, String conversationId, Span span, boolean renderAllowed) {
+        String content = ask(userMessage, conversationId);
 
         for (String correction : RENDER_CORRECTIONS) {
             if (!renderAllowed || renderHolder.get() != null
                     || !VISUAL_CLAIM.matcher(nullToEmpty(content)).find()) {
                 break;
             }
-            log.info("Resposta anuncia visualização sem render; refazendo com correção. sessionId={}", sessionId);
-            content = ask(correction, sessionId);
+            log.info("Resposta anuncia visualização sem render; refazendo com correção. conversationId={}", conversationId);
+            content = ask(correction, conversationId);
         }
 
         for (String correction : ACTION_CORRECTIONS) {
@@ -214,23 +223,24 @@ public class ChatService {
                 break;
             }
             log.info("Resposta anuncia ação pendente sem chamar tool de escrita; refazendo com correção. "
-                    + "sessionId={}", sessionId);
-            content = ask(correction, sessionId);
+                    + "conversationId={}", conversationId);
+            content = ask(correction, conversationId);
         }
 
         for (String correction : DATA_CORRECTIONS) {
             if (!answeredWithoutData(content)) {
                 break;
             }
-            log.info("Resposta traz dados sem nenhuma tool chamada; refazendo com correção. sessionId={}", sessionId);
+            log.info("Resposta traz dados sem nenhuma tool chamada; refazendo com correção. conversationId={}",
+                    conversationId);
             toolCallHolder.reset();
-            content = ask(correction, sessionId);
+            content = ask(correction, conversationId);
         }
 
         tag(span, "langfuse.trace.output", content);
 
         RenderableContent renderData = renderHolder.get();
-        rememberVisualOffer(sessionId, content, renderData);
+        rememberVisualOffer(conversationId, content, renderData);
         PendingAction pending = pendingActionHolder.get();
         String text = withPendingActionNotice(
                 withRenderFailureNotice(withoutDuplicatedTable(content, renderData), renderData), pending);
@@ -257,36 +267,36 @@ public class ChatService {
      * Render liberado quando o usuário pede a visualização, ou quando aceita a oferta feita na
      * resposta anterior ("sim"). A oferta é consumida no mesmo ato: um "sim" só vale uma vez.
      */
-    private boolean renderAllowed(String userMessage, String sessionId) {
+    private boolean renderAllowed(String userMessage, String conversationId) {
         String message = nullToEmpty(userMessage);
         if (VISUAL_REQUEST.matcher(message).find()) {
-            pendingVisualOffer.remove(sessionId);
+            pendingVisualOffer.remove(conversationId);
             return true;
         }
-        boolean accepted = pendingVisualOffer.remove(sessionId) != null
+        boolean accepted = pendingVisualOffer.remove(conversationId) != null
                 && AFFIRMATIVE.matcher(message.strip()).find();
         if (accepted) {
-            log.info("Render liberado: usuário aceitou a oferta de visualização. sessionId={}", sessionId);
+            log.info("Render liberado: usuário aceitou a oferta de visualização. conversationId={}", conversationId);
         }
         return accepted;
     }
 
     /** Guarda que esta resposta ofereceu gráfico/tabela sem desenhar, para o "sim" seguinte valer. */
-    private void rememberVisualOffer(String sessionId, String content, RenderableContent renderData) {
+    private void rememberVisualOffer(String conversationId, String content, RenderableContent renderData) {
         if (renderData == null && VISUAL_CLAIM.matcher(nullToEmpty(content)).find()) {
             if (pendingVisualOffer.size() >= MAX_PENDING_OFFERS) {
                 pendingVisualOffer.clear();
             }
-            pendingVisualOffer.put(sessionId, Boolean.TRUE);
+            pendingVisualOffer.put(conversationId, Boolean.TRUE);
         } else {
-            pendingVisualOffer.remove(sessionId);
+            pendingVisualOffer.remove(conversationId);
         }
     }
 
-    private String ask(String userMessage, String sessionId) {
+    private String ask(String userMessage, String conversationId) {
         return chatClient.prompt()
                 .user(userMessage)
-                .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
+                .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversationId))
                 .call()
                 .content();
     }
@@ -365,10 +375,10 @@ public class ChatService {
      * Atributos que o Langfuse usa para nomear o trace, agrupá-lo por conversa e exibir
      * a pergunta do usuário no nível do trace.
      */
-    private void tagRequest(Span span, String userMessage, String sessionId) {
+    private void tagRequest(Span span, String userMessage, String conversationId) {
         tag(span, "langfuse.trace.name", "chat");
-        tag(span, "langfuse.session.id", sessionId);
-        tag(span, "session.id", sessionId);
+        tag(span, "langfuse.session.id", conversationId);
+        tag(span, "session.id", conversationId);
         tag(span, "langfuse.trace.input", userMessage);
     }
 

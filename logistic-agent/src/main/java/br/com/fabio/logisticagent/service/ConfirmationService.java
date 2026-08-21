@@ -4,6 +4,7 @@ import br.com.fabio.logisticagent.confirm.PendingAction;
 import br.com.fabio.logisticagent.confirm.PendingActionStore;
 import br.com.fabio.logisticagent.dto.ChatMessageDTO;
 import br.com.fabio.logisticagent.dto.ConfirmRequestDTO;
+import br.com.fabio.logisticagent.security.AuthenticatedUser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -41,7 +42,11 @@ public class ConfirmationService {
     }
 
     public ChatMessageDTO resolve(ConfirmRequestDTO request) {
-        PendingAction action = store.take(request.actionId(), request.sessionId());
+        // Mesma chave que o ChatService usou ao registrar a pendência (ver AuthenticatedUser):
+        // sub + sessionId, não o sessionId cru — senão o id de uma pendência seria resgatável por
+        // qualquer um que soubesse (ou forçasse) o mesmo sessionId de outro usuário.
+        String conversationId = AuthenticatedUser.conversationId(request.sessionId());
+        PendingAction action = store.take(request.actionId(), conversationId);
         if (action == null) {
             // Expirou, já foi confirmada, ou a página foi recarregada (sessionId novo a cada load).
             return message("Não encontrei essa ação pendente — ela pode já ter sido confirmada ou "
@@ -49,21 +54,21 @@ public class ConfirmationService {
         }
         if (!request.approved()) {
             log.info("Ação {} ({}) cancelada pelo usuário", action.id(), action.toolName());
-            remember(request.sessionId(), "O usuário CANCELOU a ação " + action.toolName()
+            remember(conversationId, "O usuário CANCELOU a ação " + action.toolName()
                     + ". Nada foi gravado. Não a execute nem a mencione como concluída.");
             return message("Ação cancelada. Nada foi gravado.");
         }
         try {
             String result = action.callback().call(action.argsJson());
             log.info("Ação {} ({}) confirmada e executada", action.id(), action.toolName());
-            remember(request.sessionId(), "O usuário CONFIRMOU a ação " + action.toolName()
+            remember(conversationId, "O usuário CONFIRMOU a ação " + action.toolName()
                     + " e ela foi executada agora. Retorno da tool: " + result);
             return message("✅ Ação confirmada e executada.\n\n```json\n" + readable(result) + "\n```");
         } catch (RuntimeException e) {
             // Erro de negócio da API (e-mail duplicado, id inexistente) ou API fora do ar. A
             // pendência já foi consumida: repetir exige um pedido novo no chat, e não outro clique.
             log.warn("Falha ao executar a ação {} ({})", action.id(), action.toolName(), e);
-            remember(request.sessionId(), "A ação " + action.toolName() + " foi confirmada mas FALHOU: "
+            remember(conversationId, "A ação " + action.toolName() + " foi confirmada mas FALHOU: "
                     + e.getMessage() + ". Nada foi gravado.");
             return message("Não foi possível executar a ação: " + e.getMessage());
         }
@@ -93,8 +98,8 @@ public class ConfirmationService {
         }
     }
 
-    private void remember(String sessionId, String text) {
-        chatMemory.add(sessionId, new AssistantMessage(text));
+    private void remember(String conversationId, String text) {
+        chatMemory.add(conversationId, new AssistantMessage(text));
     }
 
     private ChatMessageDTO message(String content) {

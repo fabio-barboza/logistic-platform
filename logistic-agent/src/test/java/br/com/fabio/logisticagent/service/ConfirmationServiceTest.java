@@ -4,6 +4,8 @@ import br.com.fabio.logisticagent.confirm.PendingAction;
 import br.com.fabio.logisticagent.confirm.PendingActionStore;
 import br.com.fabio.logisticagent.dto.ChatMessageDTO;
 import br.com.fabio.logisticagent.dto.ConfirmRequestDTO;
+import br.com.fabio.logisticagent.security.AuthenticatedUser;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -11,6 +13,9 @@ import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import tools.jackson.databind.json.JsonMapper;
 import org.springframework.ai.tool.definition.DefaultToolDefinition;
 import org.springframework.ai.tool.definition.ToolDefinition;
@@ -38,8 +43,22 @@ class ConfirmationServiceTest {
         confirmationService = new ConfirmationService(store, chatMemory, JsonMapper.builder().build());
     }
 
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
+
+    private void authenticateAs(String sub) {
+        Jwt jwt = Jwt.withTokenValue("token").header("alg", "none").subject(sub).build();
+        SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(jwt, List.of()));
+    }
+
     /** Tool falsa no lugar da chamada MCP: o que importa aqui é o payload que chega nela. */
     private PendingAction register(UnaryOperator<String> body) {
+        return register("sessao-1", body);
+    }
+
+    private PendingAction register(String key, UnaryOperator<String> body) {
         ToolCallback callback = new ToolCallback() {
 
             @Override
@@ -53,7 +72,7 @@ class ConfirmationServiceTest {
                 return body.apply(toolInput);
             }
         };
-        return store.register("sessao-1", "createDriver", "{\"name\":\"João\"}", callback);
+        return store.register(key, "createDriver", "{\"name\":\"João\"}", callback);
     }
 
     private String memory() {
@@ -131,6 +150,36 @@ class ConfirmationServiceTest {
         assertThat(response.content())
                 .contains("\"id\" : \"abc\"")
                 .doesNotContain("\\\"");
+    }
+
+    /**
+     * Fase 5, item 2: a pendência é resgatada pela chave de conversa (sub + sessionId), não pelo
+     * sessionId cru — resolve() computa essa chave a partir do usuário autenticado na requisição
+     * de confirmação. Sem isso, o mesmo sessionId (sessionStorage forçado, ou coincidência)
+     * resgataria a pendência de outro usuário.
+     */
+    @Test
+    void pendingActionIsNotResolvableByAnotherUserWithTheSameSessionId() {
+        authenticateAs("user-1");
+        PendingAction action = register(AuthenticatedUser.conversationId("sessao-1"),
+                input -> {
+                    executed.add(input);
+                    return "{\"id\":\"abc\"}";
+                });
+
+        authenticateAs("user-2");
+        ChatMessageDTO deniedResponse = confirmationService.resolve(
+                new ConfirmRequestDTO("sessao-1", action.id(), true));
+
+        assertThat(executed).isEmpty();
+        assertThat(deniedResponse.content()).contains("Não encontrei essa ação pendente");
+
+        authenticateAs("user-1");
+        ChatMessageDTO okResponse = confirmationService.resolve(
+                new ConfirmRequestDTO("sessao-1", action.id(), true));
+
+        assertThat(executed).containsExactly("{\"name\":\"João\"}");
+        assertThat(okResponse.content()).contains("executada");
     }
 
     /** Retorno que não é JSON (as tools de vínculo devolvem frase) passa intacto. */

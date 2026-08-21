@@ -24,9 +24,11 @@ public class PendingActionHolder {
     private String sessionId;
 
     /**
-     * Sessão desta requisição, gravada pelo ChatService. A tool não recebe o sessionId (ela só vê
-     * os argumentos que o modelo escreveu), e sem ele a pendência não teria a quem pertencer — o
-     * resgate na confirmação exige o par (id, sessionId).
+     * Conversa desta requisição, gravada pelo ChatService — {@code AuthenticatedUser.conversationId},
+     * não o sessionId cru: isolar por usuário além de por aba é o que impede a pendência de um
+     * usuário ser resgatável por outro que force o mesmo sessionId. A tool não recebe esse valor
+     * (ela só vê os argumentos que o modelo escreveu), e sem ele a pendência não teria a quem
+     * pertencer — o resgate na confirmação exige o par (id, sessionId).
      */
     public void setSessionId(String sessionId) {
         this.sessionId = sessionId;
