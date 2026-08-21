@@ -12,7 +12,9 @@ public class CorsConfig implements WebMvcConfigurer {
         registry.addMapping("/api/**")
                 .allowedOrigins("http://localhost:5173")
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-                .allowedHeaders("*")
+                // "*" já cobre Authorization; listado explicitamente para deixar visível que o
+                // bearer token do Keycloak precisa passar no preflight.
+                .allowedHeaders("*", "Authorization")
                 .maxAge(3600);
     }
 }
