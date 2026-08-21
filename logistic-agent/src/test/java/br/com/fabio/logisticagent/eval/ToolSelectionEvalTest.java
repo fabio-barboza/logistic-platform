@@ -48,11 +48,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * argumentos, número de chamadas, render e texto da resposta) e só passa se todas fecharem —
  * chamar a tool certa com o filtro errado é resposta errada, não acerto parcial.
  *
- * <p>O dataset é quase todo de leitura, com uma exceção deliberada: {@code create-vehicle-calls-tool}
- * grava de verdade um veículo "Eval Bot" via createVehicle. É o único jeito de testar a regra de que
- * o modelo não pode confirmar um cadastro sem ter chamado a tool — a falha que motivou a regra era
- * exatamente uma confirmação sem escrita nenhuma. Cada execução da eval deixa mais um "Eval Bot" no
- * banco; {@code ./start.sh --reset} limpa.
+ * <p>O dataset é quase todo de leitura. Os casos de escrita ({@code create-vehicle-calls-tool},
+ * {@code create-two-drivers-registers-one}) não sujam mais o banco: a escrita passa por confirmação
+ * do usuário e, sem ninguém clicando em confirmar, ela fica registrada como pendência e nunca é
+ * executada. O que esses casos medem é a chamada de tool certa, a pendência certa e a ausência de
+ * "cadastrado com sucesso" na resposta — o modelo não pode dar por feito o que ainda depende do
+ * usuário.
  *
  * <p>Todo trecho do system prompt que descreve comportamento (não usar executeQuery no lugar de tool
  * tipada, não suportar exclusão, não confirmar ação sem chamada de tool, traduzir status) deve ter
@@ -196,6 +197,13 @@ class ToolSelectionEvalTest {
         evalCase.forbidTextOrEmpty().stream()
                 .filter(fragment -> text.contains(fragment.toLowerCase(Locale.ROOT)))
                 .forEach(fragment -> failures.add("resposta com '" + fragment + "', que não podia aparecer"));
+
+        // Escrita não executa na chamada do modelo: ela vira pendência para o usuário confirmar.
+        // O que o caso mede aqui é se a resposta registrou a escrita certa — e só uma.
+        String actualPending = response.pendingAction() == null ? "none" : response.pendingAction().tool();
+        if (evalCase.pendingAction() != null && !evalCase.pendingAction().equals(actualPending)) {
+            failures.add("ação pendente esperada '" + evalCase.pendingAction() + "', obtida '" + actualPending + "'");
+        }
 
         return new Result(evalCase, calls, actualRender, String.join("; ", failures), failures.isEmpty());
     }

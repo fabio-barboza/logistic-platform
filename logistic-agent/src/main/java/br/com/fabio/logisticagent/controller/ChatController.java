@@ -3,7 +3,9 @@ package br.com.fabio.logisticagent.controller;
 import br.com.fabio.logisticagent.config.BackendHealthIndicator;
 import br.com.fabio.logisticagent.dto.ChatMessageDTO;
 import br.com.fabio.logisticagent.dto.ChatRequestDTO;
+import br.com.fabio.logisticagent.dto.ConfirmRequestDTO;
 import br.com.fabio.logisticagent.service.ChatService;
+import br.com.fabio.logisticagent.service.ConfirmationService;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -21,10 +23,13 @@ import java.util.UUID;
 public class ChatController {
 
     private final ChatService chatService;
+    private final ConfirmationService confirmationService;
     private final BackendHealthIndicator backendHealth;
 
-    public ChatController(ChatService chatService, BackendHealthIndicator backendHealth) {
+    public ChatController(ChatService chatService, ConfirmationService confirmationService,
+            BackendHealthIndicator backendHealth) {
         this.chatService = chatService;
+        this.confirmationService = confirmationService;
         this.backendHealth = backendHealth;
     }
 
@@ -34,6 +39,15 @@ public class ChatController {
                 ? request.sessionId()
                 : UUID.randomUUID().toString();
         return ResponseEntity.ok(chatService.respond(request.message(), sessionId));
+    }
+
+    /**
+     * Resposta do usuário a uma ação de escrita pendente. Não passa pela LLM: executa (ou
+     * descarta) a chamada de tool já registrada, com os argumentos originais.
+     */
+    @PostMapping("/confirm")
+    public ResponseEntity<ChatMessageDTO> confirm(@RequestBody ConfirmRequestDTO request) {
+        return ResponseEntity.ok(confirmationService.resolve(request));
     }
 
     @GetMapping("/health")

@@ -28,6 +28,8 @@ import java.util.List;
  * @param expectText  trechos que devem aparecer na resposta final — texto e payload de render (case-insensitive)
  * @param forbidText  trechos que não podem aparecer na resposta final, texto ou render
  *                    (ex.: enum cru vazando para o usuário numa célula de tabela)
+ * @param pendingAction nome da tool de escrita que deve ficar aguardando confirmação, ou "none"
+ *                    para exigir que a resposta não registre escrita nenhuma
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record EvalCase(
@@ -44,7 +46,8 @@ public record EvalCase(
         String chartType,
         List<String> expectColumns,
         List<String> expectText,
-        List<String> forbidText) {
+        List<String> forbidText,
+        String pendingAction) {
 
     public List<String> expectAnyOfOrEmpty() {
         return orEmpty(expectAnyOf);

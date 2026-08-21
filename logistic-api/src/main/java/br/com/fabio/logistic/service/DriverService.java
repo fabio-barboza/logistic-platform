@@ -5,12 +5,14 @@ import br.com.fabio.logistic.domain.DriverVehicle;
 import br.com.fabio.logistic.domain.Vehicle;
 import br.com.fabio.logistic.dto.DriverFilter;
 import br.com.fabio.logistic.dto.DriverRequest;
+import br.com.fabio.logistic.dto.DeletionSummary;
 import br.com.fabio.logistic.dto.DriverResponse;
 import br.com.fabio.logistic.exception.ConflictException;
 import br.com.fabio.logistic.exception.NotFoundException;
 import br.com.fabio.logistic.mapper.DriverMapper;
 import br.com.fabio.logistic.repository.DriverRepository;
 import br.com.fabio.logistic.repository.DriverVehicleRepository;
+import br.com.fabio.logistic.repository.RouteRepository;
 import br.com.fabio.logistic.repository.VehicleRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -26,15 +28,18 @@ public class DriverService {
     private final DriverRepository driverRepository;
     private final VehicleRepository vehicleRepository;
     private final DriverVehicleRepository driverVehicleRepository;
+    private final RouteRepository routeRepository;
     private final DriverMapper driverMapper;
 
     public DriverService(DriverRepository driverRepository,
                           VehicleRepository vehicleRepository,
                           DriverVehicleRepository driverVehicleRepository,
+                          RouteRepository routeRepository,
                           DriverMapper driverMapper) {
         this.driverRepository = driverRepository;
         this.vehicleRepository = vehicleRepository;
         this.driverVehicleRepository = driverVehicleRepository;
+        this.routeRepository = routeRepository;
         this.driverMapper = driverMapper;
     }
 
@@ -73,10 +78,23 @@ public class DriverService {
         return driverMapper.toResponse(driver);
     }
 
+    /**
+     * Exclui o motorista. Recusa quando ele tem rotas: a FK route→driver é ON DELETE RESTRICT, e
+     * deixar o banco estourar devolveria um erro de constraint no lugar de uma explicação. Os
+     * vínculos com veículos caem por CASCADE — o retorno diz quantos, porque isso é efeito
+     * colateral que o usuário precisa enxergar.
+     */
     @Transactional
-    public void delete(UUID id) {
+    public DeletionSummary delete(UUID id) {
         Driver driver = getOrThrow(id);
+        long routes = routeRepository.countByDriverId(id);
+        if (routes > 0) {
+            throw new ConflictException("O motorista " + driver.getName() + " tem " + routes
+                    + " rota(s) e não pode ser excluído. Cancele ou transfira as rotas antes.");
+        }
+        int links = driverVehicleRepository.findByDriverId(id).size();
         driverRepository.delete(driver);
+        return new DeletionSummary(id, driver.getName(), links);
     }
 
     @Transactional

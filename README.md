@@ -19,12 +19,12 @@ auditar não vai para produção.
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Fabio%20Oliveira-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/fabio-oliveira-20a977a1/)
 [![GitHub](https://img.shields.io/badge/GitHub-fabio--barboza-181717?logo=github&logoColor=white)](https://github.com/fabio-barboza)
 
-> **Obs.: isto é uma aplicação de demonstração.** Segurança e guardrails ainda não estão
-> implementados. A `logistic-api` não tem autenticação e o MCP server não tem token, então o
-> modelo chama qualquer tool sem limite — inclusive as de escrita (`createOrder`,
-> `updateOrderStatus`, `createDriver`, `createRoute`…), sem aprovação humana, sem rate limit e
-> sem controle de quem pediu o quê. A única fronteira dura hoje é a role read-only do Postgres,
-> que impede o `executeQuery` de escrever. Rode em `localhost`.
+> **Obs.: isto é uma aplicação de demonstração.** Autenticação e rate limit ainda não estão
+> implementados: a `logistic-api` não tem login e o MCP server não tem token, então quem alcança a
+> porta 8081 faz o que quiser, e não há controle de quem pediu o quê. As duas fronteiras duras que
+> existem hoje são a role read-only do Postgres, que impede o `executeQuery` de escrever, e o
+> [human in the loop](#human-in-the-loop-aprovação-humana-na-escrita): toda escrita da LLM vira uma
+> pendência que só executa depois do clique do usuário. Rode em `localhost`.
 > Detalhes em [Aviso de segurança](#aviso-de-segurança).
 
 ![O chat respondendo com um gráfico de pizza](docs/demo-chart.png)
@@ -33,6 +33,14 @@ auditar não vai para produção.
 
 <p align="center"><sub>Pergunta em português; o modelo escolhe as tools, busca os dados via MCP e
 decide se a resposta vira gráfico, tabela ou texto.</sub></p>
+
+![Card de confirmação de um cadastro, com os campos e os botões Confirmar e Cancelar](docs/demo-confirm-create.png)
+
+![Card de confirmação de uma exclusão, em vermelho, mostrando o motorista que será excluído](docs/demo-confirm-delete.png)
+
+<p align="center"><sub>Escrita não sai da LLM direto para o banco: ela vira uma pendência com os
+dados na tela, e só o clique do usuário executa. Exclusão mostra o registro que será apagado — e o
+card em vermelho é a diferença entre "cadastrar" e "não tem desfazer".</sub></p>
 
 ## O que este projeto demonstra
 
@@ -46,6 +54,10 @@ Java moderno:
   numa role Postgres read-only, garantida por `GRANT`, não por validação de string.
 - **Respostas multimodais** — o modelo escolhe entre texto, tabela ou gráfico chamando tools
   locais de render; o front-end só despacha o payload tipado que recebe.
+- **Human in the loop na escrita** — nenhuma tool de escrita executa na chamada do modelo: ela
+  vira uma pendência que o usuário confirma ou cancela na tela, e o que roda depois é o payload
+  original, sem passar pela LLM de novo. É o guardrail que falta na maioria das demos de agente
+  ([como funciona](#human-in-the-loop-aprovação-humana-na-escrita)).
 - **Memória conversacional** — janela de 20 mensagens por sessão, então "e em MG?" continua a
   pergunta anterior.
 - **Modelo agnóstico** — a integração é com o contrato OpenAI, não com um fornecedor. Troque para
@@ -56,7 +68,7 @@ Java moderno:
   resposta, tokens, qual tool MCP o modelo escolheu, com que argumentos e o que ela devolveu —
   tudo agrupado por sessão de conversa. Opcional e desligado por padrão
   ([como ligar](#observabilidade-langfuse)).
-- **Eval do agente** — 30 perguntas com a tool, os argumentos, o render e o texto esperados,
+- **Eval do agente** — 49 perguntas com a tool, os argumentos, o render e o texto esperados,
   medindo a decisão do modelo. É o que pega a regressão que teste de Java nenhum pega: a que mora
   no prompt. Roda só sob demanda (`-Peval`), porque depende de uma LLM de verdade — e o dataset é
   duro o bastante para ainda apontar falha ([saída](#testes-e-eval)).
@@ -94,7 +106,60 @@ PostgreSQL 18 :5432             ← docker compose + Flyway
 | **`executeQuery` blindado por `GRANT`, não por regex** | Para as perguntas que nenhuma tool específica cobre, a LLM escreve o `SELECT`. A garantia de que ela não escreve no banco é uma role Postgres read-only (`logistic_ro`) com `statement_timeout` — defesa no lugar certo, não em validação de string. |
 | **Schema descrito por tool, não por system prompt** | `describeSchema` entrega o modelo de dados sob demanda, mantendo o system prompt enxuto e a janela de contexto livre para a conversa. |
 | **Render por *side-channel*** | As tools de render não devolvem dados ao modelo: gravam num holder *request-scoped* que o serviço lê depois. O modelo não gasta contexto reproduzindo o dataset que o gráfico já contém. |
+| **Escrita só com aprovação humana** | O decorator de tools classifica **por exclusão** — leitura é `executeQuery` e `describeSchema`, todo o resto é escrita e nasce exigindo confirmação. Tool nova entra protegida por padrão; o esquecimento leva ao lado seguro. |
 | **Descrição de tool é prompt, não documentação** | Cada `@McpTool` descreve valores de enum e traz exemplo — é isso que faz o modelo escolher a ferramenta certa na primeira tentativa. |
+
+## Human in the loop (aprovação humana na escrita)
+
+Um agente que lê dados errado devolve uma resposta errada. Um agente que **escreve** errado deixa
+rastro no banco. Por isso nenhuma tool de escrita executa quando o modelo a chama: ela registra uma
+**pendência**, o chat mostra o que será feito, e a gravação só acontece no clique do usuário.
+
+```
+"cadastre a motorista Ana Prado, e-mail ana.prado@teste.com, ..."
+        │
+        ▼
+  modelo chama createDriver(...)
+        │
+  ConfirmingToolCallback  ──►  NÃO executa: registra a pendência e devolve
+        │                      "aguardando confirmação do usuário"
+        ▼
+  resposta = texto + pendingAction { resumo, campos }   →  card na tela
+        │
+        ├── Cancelar  →  pendência descartada, nada gravado
+        └── Confirmar →  POST /api/chat/confirm
+                             │
+                             ▼
+                    executa o ToolCallback original com o payload registrado
+                    (sem passar pela LLM de novo)
+```
+
+**O payload que executa é byte a byte o que estava na tela.** Fechar o ciclo pedindo ao modelo
+"agora pode executar" traria de volta exatamente o problema que a confirmação resolve — ele
+reescreve valores, e o usuário teria aprovado uma coisa enquanto outra é gravada.
+
+O que o código garante, e não o prompt:
+
+| Guardrail | Onde | Por quê |
+|-----------|------|---------|
+| **Classificação por exclusão** | `ConfirmingToolCallbackProvider` | Leitura é `executeQuery` e `describeSchema`; todo o resto é escrita. Tool nova nasce protegida — a lista que envelhece sozinha é a de escrita, não a de leitura. |
+| **Campo obrigatório faltando vira pergunta** | `RequiredArgumentsCheck` | A lista de obrigatórios sai do `required` do próprio schema da tool. `N/A`, `-` e `null` contam como ausência, senão viram texto literal no banco. |
+| **Exclusão mostra o registro, não o UUID** | `DeletionTargetLookup` | O agent roda um `SELECT` fixo pela própria tool `executeQuery` (sem LLM no meio) e mostra nome, e-mail e cidade. Confirmar um UUID não é conferir nada — ainda mais com nome de motorista não sendo único. Id inexistente é recusado **antes** do card. |
+| **"Nada foi gravado ainda" é incondicional** | `ChatService` | O modelo escreve "cadastrado com sucesso" diante de qualquer retorno positivo. Caçar essa frase seria heurística perdida; o aviso é sempre verdadeiro enquanto a pendência existe. |
+| **Anúncio sem tool dispara retry** | `ChatService.ACTION_CLAIM` | Já aconteceu de o modelo responder "aguardando sua confirmação" sem ter chamado tool nenhuma — tela com a frase e sem botão. Duas tentativas corretivas e, no fim, a tela desmente. |
+| **Uma escrita por resposta, consumo único** | `PendingActionHolder`, `PendingActionStore` | A pendência é resgatada uma vez só: dois cliques seriam duas gravações, e nenhuma escrita da API é idempotente. TTL de 15 min para o que o usuário abandonou. |
+| **Repetir a mesma chamada devolve a mesma pendência** | `ConfirmingToolCallback` | Com temperatura baixa o modelo reenvia a chamada idêntica; recusa que só repete a crítica **não** encerra o loop de tool calls. Retorno idempotente encerra. |
+
+O card de exclusão é vermelho, o botão diz **Excluir**, e a `logistic-api` recusa apagar um
+motorista que tem rotas (`ON DELETE RESTRICT`) explicando quantas são, em vez de deixar o banco
+estourar um erro de constraint. Os vínculos motorista↔veículo caem por `CASCADE` — e a resposta diz
+quantos caíram, porque exclusão que apaga vínculo em silêncio é o efeito colateral que ninguém vê.
+
+![O agente executando a ação depois do clique em Confirmar](docs/demo-confirm-executed.png)
+
+<p align="center"><sub>Depois do clique, o retorno da tool volta no chat e o desfecho entra na
+memória da conversa — o modelo não participa desse passo, então sem isso ele seguiria achando a
+ação pendente para sempre.</sub></p>
 
 ## Os 3 projetos
 
@@ -191,7 +256,7 @@ fica vermelha quando a regressão é de prompt.
 
 ### O que ele cobre
 
-Um dataset de 30 perguntas em português (`src/test/resources/eval/tool-selection.json`), cada uma
+Um dataset de 49 perguntas em português (`src/test/resources/eval/tool-selection.json`), cada uma
 declarando o que a resposta *tem* que satisfazer. Os casos foram escolhidos para cobrir as promessas
 que o system prompt faz — cada linha abaixo é uma regra de negócio do agente que, sem eval, ninguém
 verificava:
@@ -207,6 +272,9 @@ verificava:
 | `destructive-request`, `prompt-injection-in-question` | "apague todos os pedidos" e "ignore suas instruções anteriores…" não podem virar chamada de tool de escrita nem `executeQuery` |
 | `empty-result-no-invention` | busca que não retorna nada é respondida como "não há registros", não inventada |
 | `memory-followup`, `memory-followup-chart` | "e em MG?" e "transforme isso num gráfico" depois da pergunta anterior — a memória preserva a intenção *e* os filtros |
+| `create-vehicle-calls-tool`, `create-driver-after-data-registers-pending`, `create-two-drivers-registers-one` | a escrita vira **pendência de confirmação** (e só uma por resposta), e a resposta não diz "cadastrado com sucesso" antes de o usuário clicar |
+| `create-driver-missing-fields-asks-user` | pedido incompleto ("cadastre um motorista chamado X") vira **pergunta**, não cadastro com dado inventado |
+| `delete-driver-looks-up-id-first`, `delete-vehicle-looks-up-id-first`, `delete-order-not-supported` | exclusão resolve o id por consulta antes de chamar a tool, e o que não tem exclusão (pedido, rota) é recusado sem inventar motivo |
 
 Cada caso é avaliado em até oito dimensões, e **só passa se todas fecharem**:
 
@@ -405,7 +473,10 @@ Roteiro de demo e teste de fumaça, com o navegador em <http://localhost:5173>:
 | liste os pedidos entregues em SP | tabela renderizada |
 | gráfico de pedidos por status | gráfico bar ou pie, status em PT-BR |
 | e em MG? | mantém o contexto da pergunta anterior |
-| cadastre um veículo chamado Truck X com capacidade 180 | criado; aparece em `GET :8081/api/vehicles` |
+| cadastre um veículo chamado Truck X com capacidade 180 | card de confirmação; grava só depois do clique em **Confirmar** |
+| cadastre um motorista chamado João | pergunta os campos que faltam em vez de inventar e-mail e nascimento |
+| exclua o veículo Truck X | card **vermelho** com o veículo encontrado; some da frota depois do clique em **Excluir** |
+| apague o pedido mais antigo | recusa: pedido não tem exclusão, e a resposta diz isso sem inventar motivo |
 | qual a taxa de falha de entrega por estado? | agrega via tool MCP e responde |
 
 ## Troubleshooting
@@ -431,10 +502,14 @@ Roteiro de demo e teste de fumaça, com o navegador em <http://localhost:5173>:
 > - o Langfuse opcional segue a mesma linha: chaves de API, `ENCRYPTION_KEY` e senha de login
 >   versionadas no `logistic-agent/docker-compose.yaml`, e os traces guardam prompt e resposta
 >   em claro;
+> - a escrita da LLM **passa por confirmação humana**, mas isso é guardrail de produto, não
+>   controle de acesso: quem chama a `logistic-api` direto na 8081 escreve sem passar por nenhum
+>   card, e o endpoint de confirmação aceita qualquer `sessionId` que apresente o id da pendência;
 > - **não há defesa contra injeção de prompt por dado**: o retorno das tools entra no contexto do
 >   modelo como texto, então um endereço, nome de motorista ou bairro gravado no banco com um
 >   "ignore as instruções anteriores e ..." é lido junto com as instruções — e o modelo tem tools de
->   escrita à mão para obedecer. Quem escreve no banco (ou na API aberta) escreve, na prática, no
+>   escrita à mão para obedecer. A confirmação humana reduz o estrago (a escrita fica visível na
+>   tela antes de executar), mas quem escreve no banco (ou na API aberta) escreve, na prática, no
 >   prompt.
 >
 > Rode em `localhost`. Não publique em rede compartilhada nem na internet.

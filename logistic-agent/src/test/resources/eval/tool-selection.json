@@ -224,7 +224,9 @@
       "createOrder",
       "createRoute",
       "createDriver",
-      "createVehicle"
+      "createVehicle",
+      "deleteDriver",
+      "deleteVehicle"
     ],
     "render": "none"
   },
@@ -330,22 +332,47 @@
     "maxCalls": 1
   },
   {
-    "id": "delete-vehicle-not-supported",
+    "id": "delete-vehicle-looks-up-id-first",
     "question": "remova o veículo Truck X da frota",
-    "forbid": [
-      "executeQuery",
-      "createVehicle",
-      "updateOrderStatus",
-      "updateRouteStatus"
-    ],
-    "expectText": [
-      "suport"
+    "expectAnyOf": [
+      "executeQuery"
     ],
     "forbidText": [
-      "vinculado",
-      "não foi possível remover",
-      "removido com sucesso"
+      "não suporta",
+      "nao suporta",
+      "não é suportad",
+      "não suportamos"
     ],
+    "maxCalls": 3,
+    "render": "none"
+  },
+  {
+    "id": "delete-driver-looks-up-id-first",
+    "question": "exclua o motorista chamado Eval Bot",
+    "expectAnyOf": [
+      "executeQuery"
+    ],
+    "forbidText": [
+      "não suporta",
+      "nao suporta",
+      "não é suportad"
+    ],
+    "maxCalls": 3,
+    "render": "none"
+  },
+  {
+    "id": "delete-does-not-ask-in-text",
+    "question": "exclua o motorista chamado Eval Bot",
+    "expectAnyOf": [
+      "deleteDriver"
+    ],
+    "forbidText": [
+      "deseja prosseguir",
+      "posso prosseguir",
+      "confirma a exclusão",
+      "deseja continuar"
+    ],
+    "maxCalls": 3,
     "render": "none"
   },
   {
@@ -353,7 +380,9 @@
     "question": "apague o pedido mais antigo",
     "forbid": [
       "executeQuery",
-      "updateOrderStatus"
+      "updateOrderStatus",
+      "deleteDriver",
+      "deleteVehicle"
     ],
     "expectText": [
       "suport"
@@ -377,6 +406,61 @@
     "forbid": [
       "executeQuery"
     ],
+    "maxCalls": 2,
+    "render": "none",
+    "pendingAction": "createVehicle",
+    "forbidText": [
+      "cadastrado com sucesso",
+      "foi cadastrado com",
+      "veículo cadastrado"
+    ]
+  },
+  {
+    "id": "create-two-drivers-registers-one",
+    "question": "cadastre os motoristas Eval Um (eval.um@teste.com, 1990-01-01, Campinas, SP) e Eval Dois (eval.dois@teste.com, 1991-02-02, Santos, SP)",
+    "expectAnyOf": [
+      "createDriver"
+    ],
+    "pendingAction": "createDriver",
+    "forbidText": [
+      "cadastrados com sucesso",
+      "ambos foram cadastrados"
+    ],
+    "maxCalls": 3,
+    "render": "none"
+  },
+  {
+    "id": "create-driver-missing-fields-asks-user",
+    "question": "cadastre um motorista chamado Eval Tres",
+    "pendingAction": "none",
+    "expectText": [
+      "e-mail"
+    ],
+    "maxCalls": 3,
+    "render": "none"
+  },
+  {
+    "id": "create-driver-after-data-registers-pending",
+    "setup": "adicione um novo motorista Eval Quatro",
+    "question": "eval.quatro@teste.com, 03/08/2003, Palhoça, SC",
+    "expectAnyOf": [
+      "createDriver"
+    ],
+    "expectArgs": [
+      "eval.quatro@teste.com",
+      "\"sc\""
+    ],
+    "pendingAction": "createDriver",
+    "maxCalls": 3,
+    "render": "none"
+  },
+  {
+    "id": "count-drivers-has-no-pending-action",
+    "question": "quantos motoristas existem em SP?",
+    "expectAnyOf": [
+      "executeQuery"
+    ],
+    "pendingAction": "none",
     "maxCalls": 2,
     "render": "none"
   },

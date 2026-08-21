@@ -22,8 +22,9 @@ public class RouteMcpTools {
     }
 
     @McpTool(description = """
-            Cria uma nova rota para um motorista. Status inicial normalmente é "IN_PROGRESS".
-            O driverId vem de uma consulta executeQuery anterior.
+            Cria uma nova rota para um motorista. Obrigatórios: driverId, status — o status inicial
+            normalmente é "IN_PROGRESS". O driverId vem de uma consulta executeQuery anterior; se não
+            souber qual motorista, consulte antes em vez de inventar um UUID.
             Exemplo: driverId="3fa85f64-...", status="IN_PROGRESS".
             """)
     public RouteResponse createRoute(
@@ -35,7 +36,8 @@ public class RouteMcpTools {
     @McpTool(description = """
             Atualiza o status de uma rota existente. Status possíveis: IN_PROGRESS, COMPLETED,
             COMPLETED_WITH_FAILURES, CANCELED. COMPLETED e COMPLETED_WITH_FAILURES são finalizadores —
-            não há transição posterior. Exemplo: id="3fa85f64-...", status="COMPLETED".
+            não há transição posterior. Obrigatórios: id, status; o id vem de uma consulta
+            executeQuery anterior. Exemplo: id="3fa85f64-...", status="COMPLETED".
             """)
     public RouteResponse updateRouteStatus(
             @McpToolParam(description = "Id (UUID) da rota") UUID id,
@@ -45,7 +47,8 @@ public class RouteMcpTools {
 
     @McpTool(description = """
             Aloca um pedido existente (ainda sem rota ou trocando de rota) em uma rota.
-            Os ids vêm de uma consulta executeQuery anterior.
+            Obrigatórios: orderId, routeId — os ids vêm de uma consulta executeQuery anterior; se não
+            souber, consulte antes em vez de inventar um UUID.
             Exemplo: orderId="3fa85f64-...", routeId="7c9e6679-...".
             """)
     public OrderResponse assignOrderToRoute(

@@ -1,7 +1,9 @@
 package br.com.fabio.logistic.controller;
 
+import br.com.fabio.logistic.dto.DeletionSummary;
 import br.com.fabio.logistic.dto.DriverRequest;
 import br.com.fabio.logistic.dto.DriverResponse;
+import br.com.fabio.logistic.exception.ConflictException;
 import br.com.fabio.logistic.exception.NotFoundException;
 import br.com.fabio.logistic.service.DriverService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,6 +21,7 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -81,5 +84,26 @@ class DriverControllerTest {
         mockMvc.perform(get("/api/drivers"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].name").value("Ana Silva"));
+    }
+
+    @Test
+    void exclusaoDevolve204() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(driverService.delete(id)).thenReturn(new DeletionSummary(id, "João Ribeiro", 2));
+
+        mockMvc.perform(delete("/api/drivers/{id}", id))
+                .andExpect(status().isNoContent());
+    }
+
+    /** Motorista com rota é conflito, não erro interno: a FK route→driver é RESTRICT. */
+    @Test
+    void exclusaoDeMotoristaComRotasDevolve409() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(driverService.delete(id))
+                .thenThrow(new ConflictException("O motorista João Ribeiro tem 3 rota(s) e não pode ser excluído."));
+
+        mockMvc.perform(delete("/api/drivers/{id}", id))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409));
     }
 }

@@ -21,8 +21,9 @@ public class OrderMcpTools {
     }
 
     @McpTool(description = """
-            Cria um novo pedido de entrega. routeId é opcional — se omitido, o pedido fica sem rota
-            alocada (unassigned). Exemplo: zipCode="13000-000", neighborhood="Centro", city="Campinas",
+            Cria um novo pedido de entrega. Obrigatórios: zipCode, neighborhood, city, state, status —
+            se o usuário não informou todos, PERGUNTE os que faltam antes de chamar. routeId é
+            opcional — se omitido, o pedido fica sem rota alocada (unassigned). Exemplo: zipCode="13000-000", neighborhood="Centro", city="Campinas",
             state="SP", status="IN_ROUTE".
             """)
     public OrderResponse createOrder(
@@ -39,7 +40,8 @@ public class OrderMcpTools {
     @McpTool(description = """
             Atualiza o status de um pedido existente. Status possíveis: IN_ROUTE, COLLECTED, DELIVERED,
             DELIVER_FAILURE, CANCELED. DELIVERED e DELIVER_FAILURE são finalizadores — não há transição
-            posterior. O id do pedido vem de uma consulta executeQuery anterior.
+            posterior. Obrigatórios: id, status. O id do pedido vem de uma consulta executeQuery
+            anterior; se não souber qual pedido, consulte antes em vez de inventar um UUID.
             Exemplo: id="3fa85f64-...", status="DELIVERED".
             """)
     public OrderResponse updateOrderStatus(

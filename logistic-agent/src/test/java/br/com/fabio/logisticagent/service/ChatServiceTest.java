@@ -1,5 +1,8 @@
 package br.com.fabio.logisticagent.service;
 
+import br.com.fabio.logisticagent.confirm.PendingAction;
+import br.com.fabio.logisticagent.confirm.PendingActionHolder;
+import br.com.fabio.logisticagent.confirm.PendingActionMapper;
 import br.com.fabio.logisticagent.dto.ChatMessageDTO;
 import br.com.fabio.logisticagent.dto.render.ChartContent;
 import br.com.fabio.logisticagent.dto.render.Dataset;
@@ -12,7 +15,10 @@ import org.mockito.stubbing.Answer;
 import org.mockito.stubbing.OngoingStubbing;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.ObjectProvider;
+import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Instant;
+import java.util.Map;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -33,6 +39,7 @@ class ChatServiceTest {
 
     private RenderHolder renderHolder;
     private ToolCallHolder toolCallHolder;
+    private PendingActionHolder pendingActionHolder;
     private ChatClient chatClient;
     private ChatService chatService;
 
@@ -41,12 +48,14 @@ class ChatServiceTest {
     void setUp() {
         renderHolder = new RenderHolder();
         toolCallHolder = new ToolCallHolder();
+        pendingActionHolder = new PendingActionHolder();
         // Caso normal: o modelo consultou o banco antes de responder. Os testes de render partem
         // daí, senão cada resposta com número cairia também no retry de dado sem tool.
         toolCallHolder.register("executeQuery");
         chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
         ObjectProvider<Tracer> tracerProvider = mock(ObjectProvider.class);
-        chatService = new ChatService(chatClient, renderHolder, toolCallHolder, tracerProvider);
+        chatService = new ChatService(chatClient, renderHolder, toolCallHolder, pendingActionHolder,
+                new PendingActionMapper(JsonMapper.builder().build()), tracerProvider);
     }
 
     @SuppressWarnings("unchecked")
@@ -301,6 +310,122 @@ class ChatServiceTest {
         ChatMessageDTO response = chatService.respond("transforme isso num gráfico", "sessao-1");
 
         assertThat(response.renderData()).isEqualTo(CHART);
+        assertThat(llmCalls).hasValue(1);
+    }
+
+    /** Escrita registrada: a tela recebe a pendência e o texto avisa que nada foi gravado. */
+    @Test
+    void pendingWriteIsReturnedWithNotice() {
+        whenLlmAnswers().thenAnswer(counting(invocation -> {
+            pendingActionHolder.set(new PendingAction("acao-1", "sessao-1", "createDriver",
+                    "{\"name\":\"João Silva\",\"state\":\"SP\"}", null, Instant.now(), Map.of()));
+            return "Vou cadastrar o motorista João Silva.";
+        }));
+
+        ChatMessageDTO response = chatService.respond("cadastre o motorista João Silva de SP", "sessao-1");
+
+        assertThat(response.pendingAction()).isNotNull();
+        assertThat(response.pendingAction().id()).isEqualTo("acao-1");
+        assertThat(response.pendingAction().summary()).isEqualTo("Cadastrar um novo motorista");
+        assertThat(response.pendingAction().arguments())
+                .containsEntry("Nome", "João Silva")
+                .containsEntry("Estado", "SP");
+        assertThat(response.content())
+                .startsWith("Vou cadastrar o motorista João Silva.")
+                .contains("Nada foi gravado ainda");
+    }
+
+    /**
+     * O aviso é incondicional: mesmo quando o modelo afirma ter cadastrado, a tela não pode
+     * ficar só com essa frase — é a afirmação falsa que a confirmação existe para impedir.
+     */
+    @Test
+    void pendingWriteNoticeContradictsClaimOfCompletion() {
+        whenLlmAnswers().thenAnswer(counting(invocation -> {
+            pendingActionHolder.set(new PendingAction("acao-2", "sessao-1", "createVehicle",
+                    "{\"name\":\"Truck X\"}", null, Instant.now(), Map.of()));
+            return "Veículo Truck X cadastrado com sucesso!";
+        }));
+
+        ChatMessageDTO response = chatService.respond("cadastre o veículo Truck X", "sessao-1");
+
+        assertThat(response.content()).contains("Nada foi gravado ainda");
+    }
+
+    /** Sem escrita, nenhum aviso e nenhuma pendência na resposta. */
+    @Test
+    void readOnlyAnswerHasNoPendingAction() {
+        whenLlmAnswers().thenAnswer(counting(invocation -> "Há 42 motoristas."));
+
+        ChatMessageDTO response = chatService.respond("quantos motoristas existem?", "sessao-1");
+
+        assertThat(response.pendingAction()).isNull();
+        assertThat(response.content()).isEqualTo("Há 42 motoristas.");
+    }
+
+    /**
+     * O modelo anuncia a confirmação sem chamar tool nenhuma — a tela ficaria com a frase e sem
+     * botão. Falha real: "Adicione um novo motorista João Ribeiro" + dados, log de tool calls vazio.
+     */
+    @Test
+    void actionClaimWithoutPendingTriggersCorrectiveRetry() {
+        whenLlmAnswers()
+                .thenAnswer(counting(invocation ->
+                        "A ação de cadastrar o motorista João Ribeiro será realizada. Aguardando sua confirmação."))
+                .thenAnswer(counting(invocation -> {
+                    pendingActionHolder.set(new PendingAction("acao-1", "sessao-1", "createDriver",
+                            "{\"name\":\"João Ribeiro\"}", null, Instant.now(), Map.of()));
+                    return "Vou cadastrar o motorista João Ribeiro.";
+                }));
+
+        ChatMessageDTO response = chatService.respond("joao.ribeiro@teste.com, 03/08/2003, Palhoça, SC", "sessao-1");
+
+        assertThat(response.pendingAction()).isNotNull();
+        assertThat(llmCalls).hasValue(2);
+    }
+
+    /** Insistiu duas vezes sem registrar: a tela precisa desmentir a promessa. */
+    @Test
+    void actionClaimWithoutPendingIsContradictedAfterTwoRetries() {
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "A ação será realizada. Aguardando sua confirmação."));
+
+        ChatMessageDTO response = chatService.respond("cadastre o motorista João", "sessao-1");
+
+        assertThat(response.pendingAction()).isNull();
+        assertThat(response.content()).contains("Nenhuma ação foi registrada");
+        assertThat(llmCalls).hasValue(3);
+    }
+
+    /**
+     * Pedir os dados que faltam é a resposta certa quando a tool recusou por campo obrigatório —
+     * não pode virar retry só porque a frase menciona registrar a ação.
+     */
+    @Test
+    void askingForMissingDataIsNotAnActionClaim() {
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "Para cadastrar João Ribeiro preciso do e-mail, da data de nascimento, da cidade e "
+                        + "do estado. Por favor, forneça essas informações para que eu possa registrar a ação."));
+
+        ChatMessageDTO response = chatService.respond("adicione um novo motorista João Ribeiro", "sessao-1");
+
+        assertThat(response.pendingAction()).isNull();
+        assertThat(response.content()).doesNotContain("Nenhuma ação foi registrada");
+        assertThat(llmCalls).hasValue(1);
+    }
+
+    /** Com pendência registrada, a frase de confirmação é verdadeira e nada é desmentido. */
+    @Test
+    void actionClaimWithPendingIsLeftAlone() {
+        whenLlmAnswers().thenAnswer(counting(invocation -> {
+            pendingActionHolder.set(new PendingAction("acao-1", "sessao-1", "createDriver",
+                    "{\"name\":\"João\"}", null, Instant.now(), Map.of()));
+            return "Aguardando sua confirmação.";
+        }));
+
+        ChatMessageDTO response = chatService.respond("cadastre o motorista João", "sessao-1");
+
+        assertThat(response.content()).doesNotContain("Nenhuma ação foi registrada");
         assertThat(llmCalls).hasValue(1);
     }
 }
