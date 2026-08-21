@@ -30,6 +30,12 @@ import static java.util.stream.Collectors.joining;
  * <p>Não achou nada é resposta útil, não erro: significa id inventado ou registro já removido, e o
  * caminho certo é recusar antes de mostrar o card — a alternativa é o usuário confirmar e receber
  * "não encontrado" depois.
+ *
+ * <p><b>Detalhe que morde (fase 3 da camada de segurança):</b> o {@code describe} abaixo chama a
+ * tool {@code executeQuery} a partir do agent, e essa chamada passa pelo mesmo caminho MCP
+ * autenticado — leva o token (trocado) do usuário da sessão. Ou seja, excluir um motorista ou
+ * veículo passa a exigir role {@code write} <b>e</b> {@code read}. Um usuário só com
+ * {@code write} quebraria aqui; não criar tal usuário no Keycloak.
  */
 @Component
 public class DeletionTargetLookup {

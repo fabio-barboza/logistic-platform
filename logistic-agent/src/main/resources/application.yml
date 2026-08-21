@@ -86,6 +86,12 @@ logistic:
     # inviolavel deste plano: sem ela, um token emitido para outro recurso seria aceito
     # aqui (confused deputy).
     audience: logistic-agent
+    keycloak:
+      token-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8090/realms/logistic}/protocol/openid-connect/token
+      client-id: logistic-agent
+      client-secret: ${KEYCLOAK_AGENT_CLIENT_SECRET:logistic-agent-secret}
+      # Audiencia que o token trocado precisa ter para a API aceitar.
+      target-audience: logistic-api
 
 logging:
   level:

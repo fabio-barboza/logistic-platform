@@ -84,7 +84,20 @@
       "serviceAccountsEnabled": true,
       "attributes": {
         "standard.token.exchange.enabled": "true"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-logistic-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "logistic-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
     },
     {
       "clientId": "logistic-api",
