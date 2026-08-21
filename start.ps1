@@ -21,6 +21,7 @@ $LogDir       = Join-Path $RootDir 'logs'
 $ComposeFile  = Join-Path $RootDir 'docker-compose.yaml'
 $SeedFile     = Join-Path $RootDir 'logistic-api\src\main\resources\db\seed\dados.sql'
 $DbContainer  = 'logisticdb'
+$KeycloakContainer = 'logistic-keycloak'
 
 $ApiPort         = 8081
 $AgentPort       = 8080
@@ -159,11 +160,19 @@ function Test-DbContainerRunning {
     return ($LASTEXITCODE -eq 0) -and (($state | Out-String).Trim() -eq 'true')
 }
 
+function Test-KeycloakContainerRunning {
+    $state = docker inspect -f '{{.State.Running}}' $KeycloakContainer 2>$null
+    return ($LASTEXITCODE -eq 0) -and (($state | Out-String).Trim() -eq 'true')
+}
+
 function Test-Ports {
     $busy = @()
 
-    # A 5432 tem tratamento próprio: se quem está ouvindo é o nosso container, o compose
-    # apenas o reaproveita — não é conflito.
+    # A 5432 e a 8090 têm tratamento próprio: se quem está ouvindo é o nosso container (Postgres
+    # ou Keycloak, os dois serviços do docker-compose sem profile), o compose apenas o
+    # reaproveita — não é conflito. Sem isso, rodar com a stack já parcialmente de pé (ex.:
+    # Keycloak que sobrou de uma sessão anterior) falhava achando porta ocupada por "outro
+    # processo" quando na verdade era o próprio container esperado.
     if (Test-PortBusy -Port $DbPort) {
         if (Test-DbContainerRunning) {
             Write-Info "container $DbContainer já está de pé — será reaproveitado"
@@ -174,11 +183,20 @@ function Test-Ports {
         }
     }
 
+    if (Test-PortBusy -Port $KeycloakPort) {
+        if (Test-KeycloakContainerRunning) {
+            Write-Info "container $KeycloakContainer já está de pé — será reaproveitado"
+        }
+        else {
+            Write-Host "  porta $KeycloakPort (Keycloak) ocupada por outro processo"
+            $busy += $KeycloakPort
+        }
+    }
+
     $ports = [ordered]@{
         $ApiPort      = 'logistic-api'
         $AgentPort    = 'logistic-agent'
         $WebuiPort    = 'logistic-webui'
-        $KeycloakPort = 'keycloak'
     }
 
     foreach ($port in $ports.Keys) {

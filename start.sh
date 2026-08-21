@@ -11,6 +11,7 @@ COMPOSE_FILE="$ROOT_DIR/docker-compose.yaml"
 SEED_FILE="$ROOT_DIR/logistic-api/src/main/resources/db/seed/dados.sql"
 ENV_FILE="$ROOT_DIR/.env"
 DB_CONTAINER="logisticdb"
+KEYCLOAK_CONTAINER="logistic-keycloak"
 
 API_PORT=8081
 AGENT_PORT=8080
@@ -159,11 +160,18 @@ db_container_is_running() {
     [ "$(docker inspect -f '{{.State.Running}}' "$DB_CONTAINER" 2>/dev/null)" = "true" ]
 }
 
+keycloak_container_is_running() {
+    [ "$(docker inspect -f '{{.State.Running}}' "$KEYCLOAK_CONTAINER" 2>/dev/null)" = "true" ]
+}
+
 check_ports() {
     local port label busy=false
 
-    # A 5432 tem tratamento próprio: se quem está ouvindo é o nosso container, o compose
-    # apenas o reaproveita — não é conflito.
+    # A 5432 e a 8090 têm tratamento próprio: se quem está ouvindo é o nosso container (Postgres
+    # ou Keycloak, os dois serviços do docker-compose sem profile), o compose apenas o
+    # reaproveita — não é conflito. Sem isso, rodar ./start.sh com a stack já parcialmente de pé
+    # (ex.: Keycloak que sobrou de uma sessão anterior) falhava achando porta ocupada por
+    # "outro processo" quando na verdade era o próprio container esperado.
     if port_is_busy "$DB_PORT"; then
         if db_container_is_running; then
             info "container $DB_CONTAINER já está de pé — será reaproveitado"
@@ -173,7 +181,16 @@ check_ports() {
         fi
     fi
 
-    for entry in "$API_PORT:logistic-api" "$AGENT_PORT:logistic-agent" "$WEBUI_PORT:logistic-webui" "$KEYCLOAK_PORT:keycloak"; do
+    if port_is_busy "$KEYCLOAK_PORT"; then
+        if keycloak_container_is_running; then
+            info "container $KEYCLOAK_CONTAINER já está de pé — será reaproveitado"
+        else
+            echo "  porta $KEYCLOAK_PORT (Keycloak) ocupada por outro processo" >&2
+            busy=true
+        fi
+    fi
+
+    for entry in "$API_PORT:logistic-api" "$AGENT_PORT:logistic-agent" "$WEBUI_PORT:logistic-webui"; do
         port="${entry%%:*}"
         label="${entry##*:}"
         if port_is_busy "$port"; then
