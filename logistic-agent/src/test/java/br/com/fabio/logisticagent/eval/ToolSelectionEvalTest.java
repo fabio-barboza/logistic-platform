@@ -7,6 +7,8 @@ import br.com.fabio.logisticagent.dto.render.TableContent;
 import br.com.fabio.logisticagent.service.ChatService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -19,6 +21,8 @@ import org.springframework.context.annotation.Import;
 import org.springframework.core.env.Environment;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
@@ -87,6 +91,24 @@ class ToolSelectionEvalTest {
 
     @Autowired
     private Environment environment;
+
+    @Autowired
+    private JwtDecoder jwtDecoder;
+
+    /**
+     * Autentica como eval-user antes de rodar (ver EvalAuthentication) e desfaz depois — desde a
+     * fase 4 a perna agent -> /mcp exige token para qualquer tool de escrita, e desde a fase 5 a
+     * lista de tools que o modelo vê já sai filtrada pela role de quem chama.
+     */
+    @BeforeEach
+    void authenticateAsEvalUser() {
+        EvalAuthentication.authenticateEvalUser(jwtDecoder);
+    }
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
 
     @Test
     @DisplayName("o modelo escolhe a tool certa na maioria dos casos do dataset")
