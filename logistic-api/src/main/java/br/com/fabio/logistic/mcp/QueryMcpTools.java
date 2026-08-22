@@ -1,6 +1,7 @@
 package br.com.fabio.logistic.mcp;
 
 import br.com.fabio.logistic.service.QueryService;
+import io.modelcontextprotocol.common.McpTransportContext;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.stereotype.Component;
@@ -10,9 +11,11 @@ import org.springframework.stereotype.Component;
 public class QueryMcpTools {
 
     private final QueryService queryService;
+    private final McpAuthorization mcpAuthorization;
 
-    public QueryMcpTools(QueryService queryService) {
+    public QueryMcpTools(QueryService queryService, McpAuthorization mcpAuthorization) {
         this.queryService = queryService;
+        this.mcpAuthorization = mcpAuthorization;
     }
 
     @McpTool(description = """
@@ -76,7 +79,9 @@ public class QueryMcpTools {
             ORDER BY falhas DESC
             """)
     public String executeQuery(
+            McpTransportContext ctx,
             @McpToolParam(description = "Consulta SELECT em PostgreSQL. Exemplo: SELECT status, COUNT(*) FROM \"order\" GROUP BY status") String sql) {
+        mcpAuthorization.require(ctx, "read");
         return queryService.executeQuery(sql);
     }
 }

@@ -1,6 +1,7 @@
 import './style.css'
 import { marked } from 'marked'
 import Chart from 'chart.js/auto'
+import { handleCallback, login, logout, authenticatedFetch, currentUser, startIdleWatch } from './auth.js'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api/chat'
 const HEALTH_URL = API_URL + '/health'
@@ -29,6 +30,71 @@ marked.setOptions({ breaks: true })
 Chart.defaults.font.family = getComputedStyle(document.documentElement)
     .getPropertyValue('--font-sans')
     .trim()
+
+/* ---------- Estado do agente ---------- */
+//
+// /api/chat/health é público (permitAll no SecurityConfig do agent) e fica fora do gate de
+// autenticação abaixo, de propósito: o indicador de status funciona mesmo no instante antes
+// do redirect para o login. checkAgent usa fetch puro, não authenticatedFetch — é a exceção
+// parcial da regra "todo acesso à rede passa por authenticatedFetch".
+
+const statusEl = document.getElementById('agent-status')
+
+function setAgentStatus(online, backendOnline) {
+    if (online && backendOnline) {
+        statusEl.dataset.state = 'online'
+        statusEl.querySelector('.status-text').textContent = 'agente online'
+    } else if (online && !backendOnline) {
+        statusEl.dataset.state = 'degraded'
+        statusEl.querySelector('.status-text').textContent = 'backend offline'
+    } else {
+        statusEl.dataset.state = 'offline'
+        statusEl.querySelector('.status-text').textContent = 'agente offline'
+    }
+}
+
+async function checkAgent() {
+    try {
+        const res = await fetch(HEALTH_URL, { method: 'GET' })
+        if (res.ok) {
+            const data = await res.json()
+            setAgentStatus(true, data.backend === 'online')
+        } else {
+            setAgentStatus(false, false)
+        }
+    } catch {
+        setAgentStatus(false, false)
+    }
+}
+
+checkAgent()
+setInterval(checkAgent, 30000)
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) checkAgent()
+})
+
+/* ---------- Autenticação (porta da frente) ---------- */
+//
+// Antes de qualquer render: resolve a sessão a partir do ?code= de retorno do Keycloak (ou
+// de uma sessão já existente no sessionStorage). Sem sessão utilizável, manda para o login e
+// não monta o resto da aplicação — tudo daqui para baixo vive dentro de init(), chamada só
+// depois desta checagem.
+let authenticated
+try {
+    authenticated = await handleCallback()
+} catch (err) {
+    document.body.innerHTML = `<p style="padding:24px;font-family:sans-serif">${err.message} Recarregue a página para tentar de novo.</p>`
+    throw err
+}
+
+if (!authenticated) {
+    await login()
+} else {
+    startIdleWatch()
+    init()
+}
+
+function init() {
 
 /* ---------- Ícones ---------- */
 
@@ -96,42 +162,16 @@ const input = document.getElementById('input')
 const sendBtn = document.getElementById('send')
 const newChatBtn = document.getElementById('new-chat')
 const composer = document.getElementById('composer')
-const statusEl = document.getElementById('agent-status')
+const userNameEl = document.getElementById('user-name')
+const logoutBtn = document.getElementById('logout-btn')
 
-/* ---------- Estado do agente ---------- */
+/* ---------- Usuário ---------- */
 
-function setAgentStatus(online, backendOnline) {
-    if (online && backendOnline) {
-        statusEl.dataset.state = 'online'
-        statusEl.querySelector('.status-text').textContent = 'agente online'
-    } else if (online && !backendOnline) {
-        statusEl.dataset.state = 'degraded'
-        statusEl.querySelector('.status-text').textContent = 'backend offline'
-    } else {
-        statusEl.dataset.state = 'offline'
-        statusEl.querySelector('.status-text').textContent = 'agente offline'
-    }
+const user = currentUser()
+if (user) {
+    userNameEl.textContent = user.username ?? '—'
 }
-
-async function checkAgent() {
-    try {
-        const res = await fetch(HEALTH_URL, { method: 'GET' })
-        if (res.ok) {
-            const data = await res.json()
-            setAgentStatus(true, data.backend === 'online')
-        } else {
-            setAgentStatus(false, false)
-        }
-    } catch {
-        setAgentStatus(false, false)
-    }
-}
-
-checkAgent()
-setInterval(checkAgent, 30000)
-document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) checkAgent()
-})
+logoutBtn.addEventListener('click', logout)
 
 /* ---------- Mensagens ---------- */
 
@@ -278,11 +318,18 @@ function buildPendingAction(pending) {
         status.textContent = approved ? (pending.destructive ? 'Excluindo...' : 'Executando...') : 'Cancelando...'
         card.appendChild(status)
         try {
-            const response = await fetch(CONFIRM_URL, {
+            const response = await authenticatedFetch(CONFIRM_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ sessionId, actionId: pending.id, approved }),
             })
+            if (response.status === 403) {
+                status.remove()
+                confirmBtn.disabled = false
+                cancelBtn.disabled = false
+                addErrorMessage('Você não tem permissão para executar ações de escrita.')
+                return
+            }
             const data = await response.json()
             status.remove()
             card.dataset.resolved = approved ? 'confirmed' : 'canceled'
@@ -509,16 +556,20 @@ async function sendText(raw) {
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
     try {
-        const response = await fetch(API_URL, {
+        const response = await authenticatedFetch(API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sessionId, message: text }),
             signal: controller.signal,
         })
 
-        const data = await response.json()
         loading.closest('.msg').remove()
-        addAssistantMessage(data.content, data.renderData, data.pendingAction)
+        if (response.status === 403) {
+            addErrorMessage('Você não tem permissão para usar o chat.')
+        } else {
+            const data = await response.json()
+            addAssistantMessage(data.content, data.renderData, data.pendingAction)
+        }
     } catch (err) {
         loading.closest('.msg').remove()
         if (err.name === 'AbortError') {
@@ -559,3 +610,5 @@ newChatBtn.addEventListener('click', startNewChat)
 
 renderEmptyState()
 input.focus()
+
+}

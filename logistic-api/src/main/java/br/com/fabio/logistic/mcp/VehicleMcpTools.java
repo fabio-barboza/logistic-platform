@@ -4,6 +4,7 @@ import br.com.fabio.logistic.dto.DeletionSummary;
 import br.com.fabio.logistic.dto.VehicleRequest;
 import br.com.fabio.logistic.dto.VehicleResponse;
 import br.com.fabio.logistic.service.VehicleService;
+import io.modelcontextprotocol.common.McpTransportContext;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.stereotype.Component;
@@ -15,9 +16,11 @@ import java.util.UUID;
 public class VehicleMcpTools {
 
     private final VehicleService vehicleService;
+    private final McpAuthorization mcpAuthorization;
 
-    public VehicleMcpTools(VehicleService vehicleService) {
+    public VehicleMcpTools(VehicleService vehicleService, McpAuthorization mcpAuthorization) {
         this.vehicleService = vehicleService;
+        this.mcpAuthorization = mcpAuthorization;
     }
 
     @McpTool(description = """
@@ -26,8 +29,10 @@ public class VehicleMcpTools {
             Exemplo: name="Van Mercedes Sprinter", capacityKg=1200.
             """)
     public VehicleResponse createVehicle(
+            McpTransportContext ctx,
             @McpToolParam(description = "Nome ou modelo do veículo") String name,
             @McpToolParam(description = "Capacidade de carga do veículo, em quilogramas") Integer capacityKg) {
+        mcpAuthorization.require(ctx, "write");
         return vehicleService.create(new VehicleRequest(name, capacityKg));
     }
 
@@ -39,7 +44,9 @@ public class VehicleMcpTools {
             Exemplo: id="3fa85f64-5717-4562-b3fc-2c963f66afa6".
             """)
     public String deleteVehicle(
+            McpTransportContext ctx,
             @McpToolParam(description = "Id (UUID) do veículo a ser excluído") UUID id) {
+        mcpAuthorization.require(ctx, "write");
         DeletionSummary summary = vehicleService.delete(id);
         return "Veículo " + summary.name() + " (" + summary.id() + ") excluído da frota."
                 + (summary.removedLinks() > 0

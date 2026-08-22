@@ -1,0 +1,196 @@
+{
+  "realm": "logistic",
+  "enabled": true,
+  "displayName": "Logistic Platform",
+  "loginTheme": "logistic",
+  "sslRequired": "none",
+
+  "internationalizationEnabled": true,
+  "supportedLocales": ["pt-BR"],
+  "defaultLocale": "pt-BR",
+
+  "ssoSessionIdleTimeout": 300,
+  "ssoSessionMaxLifespan": 28800,
+
+  "accessTokenLifespan": 600,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
+
+  "roles": {
+    "realm": [
+      {
+        "name": "chat",
+        "description": "Usar o chat (POST /api/chat no logistic-agent)"
+      },
+      {
+        "name": "read",
+        "description": "Leitura: GETs da logistic-api, executeQuery, describeSchema"
+      },
+      {
+        "name": "write",
+        "description": "Escrita/exclusao: POST/PUT/DELETE da logistic-api, as tools MCP de escrita, POST /api/chat/confirm"
+      },
+      {
+        "name": "admin",
+        "description": "Todas as permissoes - composta de chat+read+write, para 'admin permite tudo' ser configuracao e nao codigo Java",
+        "composite": true,
+        "composites": {
+          "realm": ["chat", "read", "write"]
+        }
+      }
+    ]
+  },
+
+  "clients": [
+    {
+      "clientId": "logistic-webui",
+      "name": "Logistic WebUI",
+      "description": "SPA publica com PKCE obrigatorio, sem secret. Redirect e webOrigins so para o dev server do Vite.",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:5173/*"],
+      "webOrigins": ["http://localhost:5173"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5173/*"
+      },
+      "defaultClientScopes": ["web-origins", "acr", "profile", "roles", "basic", "email"],
+      "protocolMappers": [
+        {
+          "name": "audience-logistic-agent",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "logistic-agent",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "logistic-agent",
+      "name": "Logistic Agent",
+      "description": "Confidencial: resource server do token do browser (aud=logistic-agent) e cliente OAuth que troca esse token por um com aud=logistic-api via RFC 8693 (fase 3).",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "logistic-agent-secret",
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "attributes": {
+        "standard.token.exchange.enabled": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-logistic-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "logistic-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "logistic-api",
+      "name": "Logistic API",
+      "description": "Resource server puro - audiencia dos tokens trocados na fase 3. Nao faz login (sem flow nenhum habilitado).",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false
+    },
+    {
+      "clientId": "logistic-eval",
+      "name": "Logistic Eval",
+      "description": "Unico client com direct access grant ligado - so para o arnes do eval (fase 5) obter token de um usuario de teste sem UI.",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "logistic-eval-secret",
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "audience-logistic-agent",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "logistic-agent",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "admin@logistic.local",
+      "firstName": "Admin",
+      "lastName": "Logistic",
+      "credentials": [
+        {"type": "password", "value": "admin", "temporary": false}
+      ],
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "user1",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "user1@logistic.local",
+      "firstName": "User",
+      "lastName": "One",
+      "credentials": [
+        {"type": "password", "value": "user1", "temporary": false}
+      ],
+      "realmRoles": ["chat", "read", "write"]
+    },
+    {
+      "username": "user2",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "user2@logistic.local",
+      "firstName": "User",
+      "lastName": "Two",
+      "credentials": [
+        {"type": "password", "value": "user2", "temporary": false}
+      ],
+      "realmRoles": ["chat", "read"]
+    },
+    {
+      "username": "eval-user",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "eval-user@logistic.local",
+      "firstName": "Eval",
+      "lastName": "User",
+      "credentials": [
+        {"type": "password", "value": "eval-user", "temporary": false}
+      ],
+      "realmRoles": ["admin"]
+    }
+  ]
+}

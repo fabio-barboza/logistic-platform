@@ -1,15 +1,22 @@
 package br.com.fabio.logisticagent.confirm;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.DefaultToolDefinition;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.entry;
@@ -44,11 +51,72 @@ class ConfirmingToolCallbackProviderTest {
                 store, requiredArguments, deletionTarget, holderProvider);
     }
 
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
+
     private ToolCallback callback(String name) {
         return java.util.Arrays.stream(provider.getToolCallbacks())
                 .filter(tool -> tool.getToolDefinition().name().equals(name))
                 .findFirst()
                 .orElseThrow();
+    }
+
+    private void authenticateWithRoles(String... roles) {
+        Jwt jwt = Jwt.withTokenValue("token")
+                .header("alg", "none")
+                .subject("user-x")
+                .claim("realm_access", Map.of("roles", List.of(roles)))
+                .build();
+        List<GrantedAuthority> authorities = java.util.Arrays.stream(roles)
+                .map(role -> (GrantedAuthority) new SimpleGrantedAuthority("ROLE_" + role))
+                .toList();
+        SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(jwt, authorities));
+    }
+
+    /**
+     * Sem a role write, deleteDriver/createDriver nem aparecem para o modelo escolher — é o que
+     * evita o card de confirmação seguido de 403 no clique (ver javadoc da classe).
+     */
+    @Test
+    void writeToolsAreHiddenFromUserWithoutWriteRole() {
+        authenticateWithRoles("chat", "read");
+
+        List<String> names = java.util.Arrays.stream(provider.getToolCallbacks())
+                .map(tool -> tool.getToolDefinition().name()).toList();
+
+        assertThat(names).containsExactly("executeQuery");
+    }
+
+    @Test
+    void allToolsVisibleForUserWithWriteRole() {
+        authenticateWithRoles("chat", "read", "write");
+
+        List<String> names = java.util.Arrays.stream(provider.getToolCallbacks())
+                .map(tool -> tool.getToolDefinition().name()).toList();
+
+        assertThat(names).containsExactlyInAnyOrder("createDriver", "executeQuery", "updateOrderStatus");
+    }
+
+    /** Sem role read nenhuma, nem a leitura aparece. */
+    @Test
+    void readToolIsHiddenFromUserWithoutReadRole() {
+        authenticateWithRoles("chat");
+
+        List<String> names = java.util.Arrays.stream(provider.getToolCallbacks())
+                .map(tool -> tool.getToolDefinition().name()).toList();
+
+        assertThat(names).isEmpty();
+    }
+
+    /** Sem usuário autenticado (handshake MCP do startup), a lista não é filtrada. */
+    @Test
+    void nothingIsHiddenWithoutAuthentication() {
+        List<String> names = java.util.Arrays.stream(provider.getToolCallbacks())
+                .map(tool -> tool.getToolDefinition().name()).toList();
+
+        assertThat(names).containsExactlyInAnyOrder("createDriver", "executeQuery", "updateOrderStatus");
     }
 
     @Test

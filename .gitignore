@@ -21,3 +21,6 @@ logs/
 
 # Saidas do Playwright MCP (snapshots e screenshots de sessao)
 .playwright-mcp/
+
+# Planos de trabalho (locais, nao versionados)
+plans/

@@ -1,5 +1,6 @@
 package br.com.fabio.logistic.controller;
 
+import br.com.fabio.logistic.config.SecurityConfig;
 import br.com.fabio.logistic.dto.VehicleRequest;
 import br.com.fabio.logistic.dto.VehicleResponse;
 import br.com.fabio.logistic.exception.NotFoundException;
@@ -8,6 +9,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -15,12 +19,14 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(VehicleController.class)
+@Import(SecurityConfig.class)
 class VehicleControllerTest {
 
     @Autowired
@@ -31,6 +37,10 @@ class VehicleControllerTest {
     @MockitoBean
     private VehicleService vehicleService;
 
+    // Ver DriverControllerTest para o porquê de mockar o JwtDecoder real.
+    @MockitoBean
+    private JwtDecoder jwtDecoder;
+
     @Test
     void criacaoComPayloadValidoDevolve201() throws Exception {
         UUID id = UUID.randomUUID();
@@ -39,6 +49,7 @@ class VehicleControllerTest {
         when(vehicleService.create(request)).thenReturn(response);
 
         mockMvc.perform(post("/api/vehicles")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_write")))
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isCreated())
@@ -50,6 +61,7 @@ class VehicleControllerTest {
         VehicleRequest invalido = new VehicleRequest("", -5);
 
         mockMvc.perform(post("/api/vehicles")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_write")))
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(invalido)))
                 .andExpect(status().isBadRequest())
@@ -61,7 +73,8 @@ class VehicleControllerTest {
         UUID id = UUID.randomUUID();
         when(vehicleService.findById(id)).thenThrow(new NotFoundException("Veículo não encontrado para o id " + id));
 
-        mockMvc.perform(get("/api/vehicles/{id}", id))
+        mockMvc.perform(get("/api/vehicles/{id}", id)
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_read"))))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.status").value(404));
     }

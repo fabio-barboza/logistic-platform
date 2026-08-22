@@ -14,6 +14,8 @@ import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.openai.http.okhttp.OpenAiHttpClientBuilderCustomizer;
 import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.ai.tool.execution.DefaultToolExecutionExceptionProcessor;
+import org.springframework.ai.tool.execution.ToolExecutionExceptionProcessor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -26,6 +28,13 @@ import java.time.Duration;
 public class ChatClientConfig {
 
     private static final int CHAT_MEMORY_MAX_MESSAGES = 20;
+
+    /**
+     * Marcador de {@code McpAuthorizationException} (logistic-api, mcp/McpAuthorizationException.java)
+     * — módulos Maven distintos, não compartilham classe (mesmo padrão do comentário-gêmeo em
+     * SecurityConfig). Mudou lá, mude aqui.
+     */
+    public static final String PERMISSION_DENIED_MARKER = "insufficient_scope";
 
     /** Tempo máximo de espera pela resposta completa da LLM. Veja llmTimeoutCustomizer. */
     private static final Duration LLM_READ_TIMEOUT = Duration.ofSeconds(300);
@@ -159,6 +168,30 @@ public class ChatClientConfig {
                 .defaultTools(renderTool)
                 .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
                 .build();
+    }
+
+    /**
+     * Por padrão o Spring AI não deixa uma {@code ToolExecutionException} encerrar a chamada:
+     * {@code DefaultToolExecutionExceptionProcessor} (alwaysThrow=false) converte o erro em texto e
+     * devolve ao modelo, que pode reenviar a mesma chamada — a armadilha das 172 recusas de render
+     * idênticas do CLAUDE.md, agora para negação de permissão. A recusa da tool MCP chega aqui como
+     * {@code IllegalStateException} genérica (o cliente MCP não distingue tipos de erro, só texto —
+     * ver a nota em McpAuthorizationException do logistic-api); o único jeito de diferenciar "sem
+     * permissão" de um erro de negócio comum (motorista com rotas, por exemplo, que deve continuar
+     * virando texto explicativo) é o marcador na mensagem. Só esse caso propaga; todo o resto cai no
+     * comportamento padrão (texto de volta ao modelo).
+     */
+    @Bean
+    ToolExecutionExceptionProcessor toolExecutionExceptionProcessor() {
+        ToolExecutionExceptionProcessor defaultProcessor = DefaultToolExecutionExceptionProcessor.builder().build();
+        return exception -> {
+            Throwable cause = exception.getCause();
+            String message = cause != null ? cause.getMessage() : null;
+            if (message != null && message.contains(PERMISSION_DENIED_MARKER)) {
+                throw exception;
+            }
+            return defaultProcessor.process(exception);
+        };
     }
 
     /**

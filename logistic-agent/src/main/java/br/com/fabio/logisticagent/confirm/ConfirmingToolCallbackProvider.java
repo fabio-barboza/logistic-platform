@@ -8,6 +8,9 @@ import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.metadata.ToolMetadata;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
 import java.util.Arrays;
 import java.util.List;
@@ -25,9 +28,19 @@ import java.util.Set;
  * lista de escrita) faria uma tool nova gravar sem confirmação até alguém lembrar de atualizar
  * esta classe.
  *
- * <p>Não é controle de acesso: a stack é local e sem autenticação, e quem chamar a API em 8081
- * direto continua escrevendo sem passar por aqui. O que isto resolve é a LLM gravando por conta
+ * <p>A confirmação em si não é controle de acesso: quem chamar a API em 8081 direto, ou o /mcp
+ * sem passar pelo agent, não passa por aqui. O que isto resolve é a LLM gravando por conta
  * própria a partir de uma frase ambígua.
+ *
+ * <p><b>{@link #getToolCallbacks()} também esconde do modelo a tool que o usuário autenticado
+ * não pode usar</b> ({@code write} para escrita, {@code read} para leitura). Isto também é UX,
+ * não autorização — a autorização de verdade é o {@code McpAuthorization} da logistic-api, que
+ * nega a chamada mesmo que o modelo insista. Sem o filtro aqui, {@code user2} (sem {@code write})
+ * pedia uma exclusão, o modelo chamava {@code deleteDriver}, a pendência era registrada e o card
+ * aparecia na tela — o 403 só vinha depois do clique em confirmar, três telas para descobrir que
+ * não podia. Filtrando a lista, o modelo não sabe que a tool existe e responde de cara que não
+ * pode. Reduz também a superfície de prompt injection (a tool nem está no contexto), mas não
+ * substitui a checagem da API: não remova aquela achando que esta basta.
  */
 public class ConfirmingToolCallbackProvider implements ToolCallbackProvider {
 
@@ -66,10 +79,30 @@ public class ConfirmingToolCallbackProvider implements ToolCallbackProvider {
         ToolCallback[] callbacks = delegate.getToolCallbacks();
         ToolCallback queryTool = readCallback(callbacks);
         return Arrays.stream(callbacks)
+                .filter(this::allowed)
                 .map(callback -> isWrite(callback.getToolDefinition().name())
                         ? (ToolCallback) new ConfirmingToolCallback(callback, queryTool)
                         : callback)
                 .toArray(ToolCallback[]::new);
+    }
+
+    /**
+     * O {@code ChatClient} resolve {@code ToolCallbackProvider} de novo a cada chamada (não uma
+     * vez, no bean do builder) — verificado em {@code DefaultChatClientRequestSpec.tools}, que
+     * guarda o provider e só chama {@code getToolCallbacks()} na hora de montar a requisição.
+     * É isso que permite ler o usuário autenticado <b>desta</b> requisição aqui.
+     *
+     * <p>Sem usuário (o handshake MCP do startup do agent, fora de requisição HTTP), não filtra:
+     * a lista completa é o que o agent descobre. Com usuário, esconde a tool cujo papel
+     * (read/write, mesma classificação de {@link #isWrite}) ele não tem.
+     */
+    private boolean allowed(ToolCallback callback) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (!(auth instanceof JwtAuthenticationToken)) {
+            return true;
+        }
+        String role = isWrite(callback.getToolDefinition().name()) ? "write" : "read";
+        return auth.getAuthorities().stream().anyMatch(authority -> authority.getAuthority().equals("ROLE_" + role));
     }
 
     /** O `executeQuery`, usado pelo agent para descrever o alvo de uma exclusão. */

@@ -4,6 +4,7 @@ import br.com.fabio.logistic.dto.DeletionSummary;
 import br.com.fabio.logistic.dto.DriverRequest;
 import br.com.fabio.logistic.dto.DriverResponse;
 import br.com.fabio.logistic.service.DriverService;
+import io.modelcontextprotocol.common.McpTransportContext;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.stereotype.Component;
@@ -16,9 +17,11 @@ import java.util.UUID;
 public class DriverMcpTools {
 
     private final DriverService driverService;
+    private final McpAuthorization mcpAuthorization;
 
-    public DriverMcpTools(DriverService driverService) {
+    public DriverMcpTools(DriverService driverService, McpAuthorization mcpAuthorization) {
         this.driverService = driverService;
+        this.mcpAuthorization = mcpAuthorization;
     }
 
     @McpTool(description = """
@@ -29,11 +32,13 @@ public class DriverMcpTools {
             city="Campinas", state="SP".
             """)
     public DriverResponse createDriver(
+            McpTransportContext ctx,
             @McpToolParam(description = "Nome completo do motorista") String name,
             @McpToolParam(description = "E-mail único do motorista") String email,
             @McpToolParam(description = "Data de nascimento (ISO yyyy-MM-dd)") LocalDate birthday,
             @McpToolParam(description = "Cidade de residência") String city,
             @McpToolParam(description = "Sigla do estado (UF), 2 letras") String state) {
+        mcpAuthorization.require(ctx, "write");
         return driverService.create(new DriverRequest(name, email, birthday, city, state));
     }
 
@@ -43,8 +48,10 @@ public class DriverMcpTools {
             anterior; se não souber, consulte antes em vez de inventar um UUID.
             """)
     public String linkDriverVehicle(
+            McpTransportContext ctx,
             @McpToolParam(description = "Id (UUID) do motorista") UUID driverId,
             @McpToolParam(description = "Id (UUID) do veículo") UUID vehicleId) {
+        mcpAuthorization.require(ctx, "write");
         driverService.linkVehicle(driverId, vehicleId);
         return "Motorista " + driverId + " vinculado ao veículo " + vehicleId + " com sucesso.";
     }
@@ -59,7 +66,9 @@ public class DriverMcpTools {
             Exemplo: id="3fa85f64-5717-4562-b3fc-2c963f66afa6".
             """)
     public String deleteDriver(
+            McpTransportContext ctx,
             @McpToolParam(description = "Id (UUID) do motorista a ser excluído") UUID id) {
+        mcpAuthorization.require(ctx, "write");
         DeletionSummary summary = driverService.delete(id);
         return "Motorista " + summary.name() + " (" + summary.id() + ") excluído."
                 + (summary.removedLinks() > 0

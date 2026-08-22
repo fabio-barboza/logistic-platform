@@ -22,6 +22,7 @@ public class EvalEnvironmentCondition implements ExecutionCondition {
 
     private static final String API_URL = System.getProperty("eval.api.url", "http://localhost:8081");
     private static final String LLM_URL = System.getProperty("eval.llm.url", "http://localhost:8200");
+    private static final String KEYCLOAK_URL = System.getProperty("eval.keycloak.url", "http://localhost:8090");
 
     @Override
     public ConditionEvaluationResult evaluateExecutionCondition(ExtensionContext context) {
@@ -40,6 +41,18 @@ public class EvalEnvironmentCondition implements ExecutionCondition {
                     Suba o modelo configurado em spring.ai.openai.base-url e rode de novo
                     (ou aponte para outro com -Deval.llm.url=<url>).
                     """.formatted(LLM_URL));
+        }
+        // A perna agent -> /mcp exige token: sem o Keycloak no ar, o eval falha
+        // tarde (a meio do contexto do Spring, num JwtDecoder que resolve o issuer na criação do
+        // bean) e com um erro que não aponta para a causa real.
+        if (!reachable(KEYCLOAK_URL + "/realms/logistic/.well-known/openid-configuration")) {
+            throw new IllegalStateException("""
+
+                    Eval abortado: Keycloak não respondeu em %s.
+                    O eval se autentica como eval-user (EvalAuthenticationExtension) antes de rodar —
+                    sem o Keycloak, nem o contexto do Spring sobe (o JwtDecoder resolve o issuer no boot).
+                    Suba a stack com ./start.sh (ou aponte para outro com -Deval.keycloak.url=<url>).
+                    """.formatted(KEYCLOAK_URL));
         }
         return ConditionEvaluationResult.enabled("ambiente do eval disponível");
     }
