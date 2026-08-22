@@ -42,6 +42,12 @@ class LangfuseObservabilityConfigTest {
     }
 
     @Test
+    void securityFilterChainObservationsAreNotObserved() {
+        assertThat(predicate.test("spring.security.filterchains", new Observation.Context())).isFalse();
+        assertThat(predicate.test("spring.security.http.secured.filterchains", new Observation.Context())).isFalse();
+    }
+
+    @Test
     void otherObservationsPassThrough() {
         assertThat(predicate.test("spring.ai.chat.client", new Observation.Context())).isTrue();
     }

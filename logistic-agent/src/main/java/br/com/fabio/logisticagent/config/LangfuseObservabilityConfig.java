@@ -37,10 +37,19 @@ public class LangfuseObservabilityConfig {
      * {@code @Scheduled} do BackendHealthIndicator, que o Spring observa por conta própria
      * como "tasks.scheduled.execution" — esse último produzia um trace de 5ms a cada 15s.
      * O Langfuse é para as conversas; nenhuma task agendada do agent tem valor lá.
+     *
+     * Terceiro corte, por nome: o Spring Security 6+ instrumenta o próprio filter chain
+     * ("spring.security.filterchains" e "spring.security.http.secured.filterchains"), um
+     * par before/after por requisição HTTP. O contexto é uma classe package-private de
+     * {@code ObservationFilterChainDecorator} — não dá para filtrar por
+     * {@code instanceof} como nos outros dois, daí o corte ser pelo prefixo do nome.
      */
     @Bean
     ObservationPredicate skipHealthChecks() {
         return (name, context) -> {
+            if (name.startsWith("spring.security")) {
+                return false;
+            }
             if (context instanceof ServerRequestObservationContext serverContext) {
                 String path = serverContext.getCarrier().getRequestURI();
                 return !path.startsWith("/actuator") && !path.equals("/api/chat/health");
