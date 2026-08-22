@@ -82,7 +82,9 @@ Camadas: `controller/` (REST) e `mcp/` (tools) são **dois adaptadores sobre o m
   - A lista é **por exclusão**: leitura é `executeQuery` e `describeSchema`, o resto é escrita. Tool nova nasce confirmada; o inverso deixaria uma tool nova gravando sozinha até alguém lembrar de atualizar a classe.
   - **Campo obrigatório faltando não vira pendência** (`RequiredArgumentsCheck`): a lista de obrigatórios sai do `required` do próprio `inputSchema` da tool, então tool nova é coberta sozinha — nada é declarado no agent. Valor de "não sei" preenchido pelo modelo (`N/A`, `-`, `null`, `não informado`) conta como ausência, senão vira texto literal no banco. As descrições das tools de escrita na API listam os obrigatórios e mandam perguntar antes de chamar — descrição é prompt, e é ela que evita o round-trip da recusa. Deixar a API recusar não serve: ela recusa **depois** da confirmação, e o usuário já teria clicado em confirmar num card com "Nome: -". O que isso *não* pega é o valor **inventado** (`joao@email.com` para "cadastre o motorista João") — nenhum schema distingue isso de dado real; quem pega é o próprio card, que mostra cada valor antes de gravar.
   - **Replay literal.** Nunca peça ao modelo para refazer a chamada depois do "sim": com o payload reescrito, o usuário confirma uma coisa e outra é gravada. Pela mesma razão a frase do card é montada em código (`PendingActionMapper`), não pedida à LLM.
-  - **Ação anunciada sem tool chamada** (`ChatService.ACTION_CLAIM` + `ACTION_CORRECTIONS`): resposta que afirma "aguardando sua confirmação" com o `PendingActionHolder` vazio dispara retry corretivo, até duas vezes, e no fim a tela desmente (`withUnregisteredActionNotice`). Mesma patologia do "aqui está o gráfico" sem `renderChart`, e aconteceu no primeiro teste real: "Adicione um novo motorista João Ribeiro" + os dados no turno seguinte, log de tool calls **vazio** nos dois turnos, e a tela com a frase de confirmação sem botão nenhum. O `answeredWithoutData` não pega esse caso porque a frase não tem dígito. O regex é restrito a frases que afirmam a **existência** da pendência: "preciso do e-mail para registrar a ação" é o modelo pedindo dado e não pode virar retry.
+  - **Ação anunciada sem tool chamada** (`ChatService.ACTION_CLAIM` + `ACTION_CORRECTIONS`): resposta que afirma "aguardando sua confirmação" — ou que dá a gravação por feita ("cadastrado com sucesso", "cadastrei") — com o `PendingActionHolder` vazio dispara retry corretivo, até duas vezes, e no fim a tela desmente (`withUnregisteredActionNotice`). Mesma patologia do "aqui está o gráfico" sem `renderChart`, e aconteceu no primeiro teste real: "Adicione um novo motorista João Ribeiro" + os dados no turno seguinte, log de tool calls **vazio** nos dois turnos, e a tela com a frase de confirmação sem botão nenhum. O `answeredWithoutData` não pega esse caso porque a frase não tem dígito. A parte de "aguardando confirmação" é restrita a frases que afirmam a **existência** da pendência ("preciso do e-mail para registrar a ação" é o modelo pedindo dado e não pode virar retry); a de conclusão exige o marcador de sucesso, porque "o motorista foi cadastrado em 12/03/2024" é leitura legítima de `created_at`.
+  - **Pedido de escrita que não virou pendência** (`ChatService.WRITE_REQUEST` + `writeWentNowhere`): o gatilho aqui **não é a frase do modelo**, é o pedido do usuário (regex sobre a mensagem, como o `VISUAL_REQUEST`) mais a ausência de pendência no fim do turno. Nasceu do usuário sem a role `write`: sem as tools de escrita na lista, o modelo tenta contornar por `executeQuery` (o `INSERT` morre na role read-only) e anuncia sucesso — e em três execuções da **mesma** pergunta ele disse "cadastrado com sucesso", "a ação foi registrada" e "será cadastrado assim que você confirmar na tela". Perseguir frase não fecha isso; o que fecha é o fato. O aceite curto ("sim, pode cadastrar", ou só "sim") mantém o pedido de pé por conversa (`pendingWriteIntent`, mesmo mecanismo do `pendingVisualOffer`) — é justamente no turno do aceite que o modelo dá por feito. Duas saídas para não gastar o aviso à toa: resposta terminada em `?` (falta dado, fluxo aberto) e `DENIAL` (a resposta já diz que não deu). O `DENIAL` é **supressão, não detecção**: se ele falhar, sobra um aviso redundante; nunca esconde mentira, porque o `ACTION_CLAIM` é avaliado antes e tem precedência.
+  - **Nada verificado, depois das correções** (`withUnverifiedAnswerNotice`): quando o `answeredWithoutData` continua valendo depois dos dois retries, o número inventado ia para a tela sem ressalva nenhuma. Agora a tela diz que nenhuma tool foi chamada. Os três avisos são exclusivos entre si, do mais específico para o mais genérico — dois "isso não aconteceu" na mesma resposta viram ruído, e ruído faz o usuário parar de ler o aviso que importa.
   - **O aviso de "nada foi gravado ainda" é incondicional** (`ChatService.withPendingActionNotice`) enquanto houver pendência. O modelo escreve "cadastrado com sucesso" diante de qualquer retorno positivo, e procurar essa afirmação na resposta é heurística perdida — há infinitas formas de dizer que fez.
   - **Uma escrita por resposta.** A segunda chamada de escrita é recusada; a repetição da **mesma** chamada devolve a **mesma** pendência, com cara de sucesso. É o retorno de sucesso que encerra o loop de tool calls (a armadilha das 182 recusas do render), e aqui não dá para "ceder e executar" no teto — ceder é o que a confirmação existe para impedir.
   - O desfecho (confirmado/cancelado/falhou) entra na `ChatMemory` da sessão, porque o modelo não participa desse passo e sem isso o turno seguinte responderia sobre uma ação eternamente pendente. O `PendingActionStore` consome a pendência **uma vez** (dois cliques = duas escritas, e nenhuma tool da API é idempotente), com TTL de 15min e teto de 200.
@@ -277,3 +279,42 @@ puro, sem login nenhum.
   toda a stack antes da autenticação existir. Registrado aqui porque é a única divergência
   deliberada da spec (todo o resto — token exchange, audiência, "MUST NOT accept or transit any other
   tokens" — segue a normativa à risca).
+
+### Tema de login (`infra/keycloak/themes/logistic`)
+
+A tela de login é a primeira tela da aplicação, e usava a cara do Keycloak. O tema `logistic`
+(`loginTheme` no realm) repete a paleta, a marca, os ícones e o botão claro/escuro do webui. É
+volume `:ro` no `docker-compose.yaml`, e o `start-dev` **não cacheia tema**: editar `.ftl`/`.css`
+e dar F5 basta — só realm importado exige recriar container, tema não.
+
+- **`parent=base`, não `parent=keycloak`.** O tema `keycloak` carrega três folhas do PatternFly
+  (v3 e v4) e prende o markup ao grid do Bootstrap — reestilizar por cima sai mais caro do que
+  partir do `base`, que traz só os `.ftl` com a lógica dos fluxos e estilo nenhum. O preço: os
+  `.ftl` herdados escrevem `${properties.kcXxxClass}` no HTML, e o que não estiver mapeado no
+  `theme.properties` sai como classe vazia. **Elemento sem estilo quase sempre é propriedade
+  faltando ali, não CSS faltando** — o `.ftl` do `base` é a lista do que precisa existir.
+- **Só o `template.ftl` é sobrescrito.** `login.ftl`, `error.ftl`, `login-page-expired.ftl`,
+  `logout-confirm.ftl` e o resto vêm do `base` e entram no layout pelo macro
+  `registrationLayout` — por isso a tela de erro e a de logout já saem com a marca sem terem
+  arquivo próprio. Os scripts que o template do `base` injeta (`authChecker`,
+  `menu-button-links`, o handler de `data-once-link`) são funcionais e foram mantidos: tirá-los
+  quebra o login em outra aba e o dropdown de idioma.
+- **Os tokens de cor são cópia de `logistic-webui/src/style.css`**, não import: são origens
+  diferentes (8090 x 5173) e o Keycloak só serve o que está dentro do tema. Mexeu na paleta do
+  webui? Mexa aqui junto, senão o login descola do resto.
+- **Botão claro/escuro:** mesmo mecanismo do webui — `data-theme` no `<html>`, chave `lp-theme`
+  no `localStorage`, e um snippet inline no `<head>` que resolve o tema **antes da primeira
+  pintura** (sem ele a tela pisca clara antes de virar escura). A preferência **não** é
+  compartilhada com o chat: `localStorage` é por origem.
+- **Ícone de olho da senha é máscara SVG** (`.pw-icon-show`/`.pw-icon-hide`). O `base` marca esse
+  botão com classe de FontAwesome, que só existe no tema `keycloak`; o `passwordVisibility.js`
+  do Keycloak troca uma classe pela outra no clique, então bastou dar significado às duas.
+- **`.locale-list` precisa de `display: none` no CSS.** O `menu-button-links.js` abre o menu
+  escrevendo `style.display = "block"` e fecha **removendo** a propriedade — o estado fechado é
+  responsabilidade do tema. Hoje o dropdown nem aparece (um locale só), mas some a lista inteira
+  se alguém adicionar o segundo e o CSS não estiver lá.
+- **O português vem do realm, não do tema:** `internationalizationEnabled` +
+  `supportedLocales: ["pt-BR"]` + `defaultLocale` no `logistic-realm.json`; as mensagens já
+  existem no tema `base`. Com i18n desligada o Keycloak usa `messages_en` e a tela sai em inglês
+  por mais que o tema esteja certo. E isso é mudança de **realm**: num container que já subiu,
+  `--import-realm` não relê o JSON (`docker compose down -v`, ou editar pela UI/Admin API).

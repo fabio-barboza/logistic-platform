@@ -5,6 +5,10 @@
   "loginTheme": "logistic",
   "sslRequired": "none",
 
+  "internationalizationEnabled": true,
+  "supportedLocales": ["pt-BR"],
+  "defaultLocale": "pt-BR",
+
   "ssoSessionIdleTimeout": 300,
   "ssoSessionMaxLifespan": 28800,
 

@@ -67,6 +67,9 @@ services:
       - "9000:9000"   # porta de management, onde vive o /health
     volumes:
       - ./infra/keycloak/import:/opt/keycloak/data/import:ro
+      # Tema de login da aplicação (loginTheme do realm). Ao contrário do import acima,
+      # este volume é relido a cada requisição: o start-dev desliga o cache de tema, então
+      # editar .ftl/.css e dar F5 basta — não precisa recriar o container.
       - ./infra/keycloak/themes/logistic:/opt/keycloak/themes/logistic:ro
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin

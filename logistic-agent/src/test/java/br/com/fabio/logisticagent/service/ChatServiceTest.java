@@ -338,15 +338,210 @@ class ChatServiceTest {
         assertThat(llmCalls).hasValue(2);
     }
 
-    /** Duas correções e para: o loop de tool calls não pode ficar preso no modelo teimoso. */
+    /**
+     * Duas correções e para: o loop de tool calls não pode ficar preso no modelo teimoso. E o que
+     * sobra na tela não pode ser só o número inventado — quem insistiu foi o modelo, quem paga a
+     * conta é quem lê.
+     */
     @Test
-    void dataWithoutToolCallStopsAfterTwoCorrections() {
+    void dataWithoutToolCallStopsAfterTwoCorrectionsAndIsContradicted() {
         toolCallHolder.reset();
         whenLlmAnswers().thenAnswer(counting(invocation -> "São 106 pedidos entregues em MG."));
 
-        chatService.respond("e em MG?", "sessao-1");
+        ChatMessageDTO response = chatService.respond("e em MG?", "sessao-1");
 
         assertThat(llmCalls).hasValue(3);
+        assertThat(response.content())
+                .startsWith("São 106 pedidos entregues em MG.")
+                .contains("Nenhuma consulta e nenhuma gravação aconteceram");
+    }
+
+    /**
+     * Falha real, com o usuário sem a role {@code write}: sem as tools de escrita na lista, o
+     * modelo tenta contornar por executeQuery (o INSERT morre na role read-only) e anuncia
+     * "cadastrado com sucesso". Nada foi gravado — a fronteira é a role na API —, mas a tela dizia
+     * o contrário. Repare que houve tool call no turno: o gatilho aqui não pode ser "nenhuma tool
+     * chamada", e sim o invariante de que escrita nunca conclui dentro de um turno do chat.
+     */
+    @Test
+    void writeSuccessClaimWithoutPendingIsContradicted() {
+        toolCallHolder.reset();
+        toolCallHolder.register("executeQuery");
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "O veículo Truck Y com capacidade de 200 kg foi cadastrado com sucesso."));
+
+        ChatMessageDTO response = chatService.respond("sim, pode cadastrar", "sessao-1");
+
+        assertThat(response.pendingAction()).isNull();
+        assertThat(response.content()).contains("Nada foi gravado");
+        assertThat(llmCalls).hasValue(3);
+    }
+
+    /** Primeira pessoa é a mesma afirmação com outra roupa: "cadastrei o veículo". */
+    @Test
+    void firstPersonWriteClaimWithoutPendingIsContradicted() {
+        whenLlmAnswers().thenAnswer(counting(invocation -> "Pronto, cadastrei o veículo Truck Y."));
+
+        ChatMessageDTO response = chatService.respond("cadastre o veículo Truck Y", "sessao-1");
+
+        assertThat(response.content()).contains("Nada foi gravado");
+    }
+
+    /**
+     * {@code created_at} lido do banco não é anúncio de escrita: "foi cadastrado em 12/03/2024" é
+     * resposta de leitura legítima, e desmentir aí seria mentir para o usuário.
+     */
+    @Test
+    void readingCreationDateIsNotAWriteClaim() {
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "O motorista João Silva foi cadastrado em 12/03/2024 e atende a região de Campinas."));
+
+        ChatMessageDTO response = chatService.respond("quando o João Silva entrou?", "sessao-1");
+
+        assertThat(response.content()).doesNotContain("Nada foi gravado");
+        assertThat(llmCalls).hasValue(1);
+    }
+
+    /**
+     * O caso que motivou o gatilho por pedido do usuário: a mesma pergunta, feita três vezes por um
+     * usuário sem {@code write}, rendeu três frases diferentes ("cadastrado com sucesso", "a ação
+     * foi registrada", "será cadastrado assim que você confirmar na tela"). Perseguir a frase do
+     * modelo é corrida perdida — aqui o gatilho é o pedido do usuário mais a ausência de pendência.
+     */
+    @Test
+    void writeRequestThatRegisteredNothingIsAnnouncedAsNotWritten() {
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "O veículo Truck Z com capacidade de 200 kg está pronto para entrar na frota."));
+
+        ChatMessageDTO response = chatService.respond(
+                "cadastre um veículo chamado Truck Z com capacidade 200", "sessao-1");
+
+        assertThat(response.pendingAction()).isNull();
+        assertThat(response.content()).contains("Nada foi gravado nesta resposta");
+    }
+
+    /** O aceite não repete o verbo: "sim" depois do pedido de escrita continua sendo escrita. */
+    @Test
+    void bareYesAfterAWriteRequestIsStillAWriteTurn() {
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "Confirma que a capacidade é 200 kg?"));
+        chatService.respond("cadastre um veículo chamado Truck Z com capacidade 200", "sessao-1");
+
+        whenLlmAnswers().thenAnswer(counting(invocation -> "Pronto! O veículo Truck Z já está na frota."));
+        ChatMessageDTO response = chatService.respond("sim", "sessao-1");
+
+        assertThat(response.content()).contains("Nada foi gravado nesta resposta");
+    }
+
+    /** Pergunta do modelo mantém o fluxo aberto: ninguém foi informado de que algo aconteceu. */
+    @Test
+    void questionBackToTheUserIsNotAnnouncedAsNotWritten() {
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "Para cadastrar preciso do e-mail e da data de nascimento. Pode me informar?"));
+
+        ChatMessageDTO response = chatService.respond("cadastre um motorista chamado João", "sessao-1");
+
+        assertThat(response.content()).doesNotContain("Nada foi gravado");
+    }
+
+    /**
+     * Recusa correta não precisa de aviso: a frase já disse que não deu. As duas formas abaixo
+     * saíram do modelo em execuções reais da mesma pergunta ("apague o pedido mais antigo").
+     */
+    @Test
+    void refusalIsNotAnnouncedAsNotWritten() {
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "A plataforma não suporta exclusão de pedidos."));
+
+        ChatMessageDTO response = chatService.respond("apague o pedido mais antigo", "sessao-1");
+
+        assertThat(response.content()).isEqualTo("A plataforma não suporta exclusão de pedidos.");
+    }
+
+    @Test
+    void refusalInThePassiveVoiceIsAlsoLeftAlone() {
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "A exclusão de pedidos não é suportada pelo sistema. Não há uma ferramenta "
+                        + "disponível para excluir pedidos."));
+
+        ChatMessageDTO response = chatService.respond("apague o pedido mais antigo", "sessao-1");
+
+        assertThat(response.content()).doesNotContain("Nada foi gravado");
+    }
+
+    /**
+     * A supressão da recusa não pode virar esconderijo: quando a mesma resposta recusa uma coisa e
+     * afirma outra como feita, a afirmação explícita tem precedência e é desmentida.
+     */
+    @Test
+    void denialMixedWithAWriteClaimIsStillContradicted() {
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "Não posso excluir pedidos, mas cadastrei o veículo Truck Z para você."));
+
+        ChatMessageDTO response = chatService.respond("apague o pedido e cadastre o veículo Truck Z", "sessao-1");
+
+        assertThat(response.content()).contains("Nada foi gravado");
+    }
+
+    /** O pedido de escrita não pode sobreviver ao assunto seguinte. */
+    @Test
+    void writeIntentDoesNotLeakIntoTheNextQuestion() {
+        whenLlmAnswers().thenAnswer(counting(invocation -> "Confirma a capacidade?"));
+        chatService.respond("cadastre um veículo Truck Z", "sessao-1");
+
+        whenLlmAnswers().thenAnswer(counting(invocation -> "Há 42 motoristas."));
+        ChatMessageDTO response = chatService.respond("quantos motoristas existem?", "sessao-1");
+
+        assertThat(response.content()).isEqualTo("Há 42 motoristas.");
+    }
+
+    /** Escrita registrada de verdade: a frase de conclusão é desmentida pelo aviso de pendência. */
+    @Test
+    void writeSuccessClaimWithPendingKeepsOnlyThePendingNotice() {
+        whenLlmAnswers().thenAnswer(counting(invocation -> {
+            pendingActionHolder.set(new PendingAction("acao-3", "sessao-1", "createVehicle",
+                    "{\"name\":\"Truck Y\"}", null, Instant.now(), Map.of()));
+            return "Veículo Truck Y cadastrado com sucesso.";
+        }));
+
+        ChatMessageDTO response = chatService.respond("cadastre o veículo Truck Y", "sessao-1");
+
+        assertThat(response.content())
+                .contains("Nada foi gravado ainda")
+                .doesNotContain("Nenhuma ação foi registrada");
+        assertThat(llmCalls).hasValue(1);
+    }
+
+    /**
+     * Perguntar de volta é a resposta certa quando falta dado, e a pergunta costuma repetir o
+     * número que o usuário deu ("...capacidade de 200 kg?"). Desmentir aí seria ruído.
+     */
+    @Test
+    void questionRepeatingUserNumbersIsNotContradicted() {
+        toolCallHolder.reset();
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "Deseja cadastrar um novo veículo com esse nome e capacidade de 200 kg?"));
+
+        ChatMessageDTO response = chatService.respond("cadastre um veículo Truck Y com capacidade 200", "sessao-1");
+
+        assertThat(response.content()).doesNotContain("Nenhuma consulta e nenhuma gravação aconteceram");
+    }
+
+    /**
+     * Quando as duas heurísticas casam na mesma resposta, vale só a mais específica: o usuário
+     * está esperando um botão. Dois avisos de "isso não aconteceu" viram ruído.
+     */
+    @Test
+    void unregisteredActionNoticeWinsOverTheUnverifiedDataOne() {
+        toolCallHolder.reset();
+        whenLlmAnswers().thenAnswer(counting(invocation ->
+                "A ação foi registrada: 1 veículo de 200 kg. Aguardando sua confirmação."));
+
+        ChatMessageDTO response = chatService.respond("cadastre um veículo de 200 kg", "sessao-1");
+
+        assertThat(response.content())
+                .contains("Nenhuma ação foi registrada")
+                .doesNotContain("Nenhuma consulta e nenhuma gravação aconteceram");
     }
 
     /** Recusa e conversa não têm número: não há dado a desmentir, não se refaz. */
