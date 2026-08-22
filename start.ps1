@@ -632,6 +632,11 @@ function Show-Urls {
   Swagger    http://localhost:$ApiPort/swagger-ui.html
   Keycloak   http://localhost:$KeycloakPort (admin/admin)
 
+  Usuários (senha = usuário):
+    user1  conversar, consultar e confirmar escritas
+    user2  conversar e consultar (sem escrita)
+    admin  tudo, mais o console do Keycloak em http://localhost:$KeycloakPort
+
   Logs em logs\ (ex.: Get-Content -Wait logs\logistic-agent.log)
   Ctrl+C derruba tudo.
 ================================================================

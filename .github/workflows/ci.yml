@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancela execuções antigas da mesma branch/PR quando chega um push novo.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.module }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Um módulo quebrado não esconde o resultado do outro.
+      fail-fast: false
+      matrix:
+        module: [logistic-api, logistic-agent]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configura Java 21 (Temurin) com cache Maven
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+          cache-dependency-path: ${{ matrix.module }}/pom.xml
+
+      # Os testes rodam sem Docker: a API usa H2 (perfil `test`, schema pela própria
+      # migration V1) e o agent não sobe stack nenhuma. O eval (@Tag("eval")) fica de
+      # fora porque o surefire exclui a tag por padrão — o perfil `-Peval`, que exigiria
+      # LLM, Keycloak e banco no ar, NÃO é ativado aqui.
+      - name: ./mvnw -B test
+        working-directory: ${{ matrix.module }}
+        run: ./mvnw -B test
+
+      - name: Publica os relatórios do surefire
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports-${{ matrix.module }}
+          path: ${{ matrix.module }}/target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7

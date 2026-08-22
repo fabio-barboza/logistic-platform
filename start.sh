@@ -573,6 +573,11 @@ print_urls() {
   Swagger    http://localhost:$API_PORT/swagger-ui.html
   Keycloak   http://localhost:$KEYCLOAK_PORT (admin/admin)
 
+  Usuários (senha = usuário):
+    user1  conversar, consultar e confirmar escritas
+    user2  conversar e consultar (sem escrita)
+    admin  tudo, mais o console do Keycloak em http://localhost:$KEYCLOAK_PORT
+
   Logs em logs/ (ex.: tail -f logs/logistic-agent.log)
   Ctrl+C derruba tudo.
 ================================================================
