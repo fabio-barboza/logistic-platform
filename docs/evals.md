@@ -93,33 +93,48 @@ Decisões de desenho que valem citar:
   recebendo um provider qualquer e não sabe que está sendo observado. O render é verificado pelo
   `RenderHolder`, com uma requisição nova por caso.
 
-Saída de uma execução (`qwen3.6:35b` — trecho):
+Saída de uma execução (`qwen3.6:35b`, 50 casos — trecho):
 
 ```
 === Eval: seleção de tools ===
-tools MCP descobertas: 10 | modelo: qwen3.6:35B
+tools MCP descobertas: 12 | modelo: qwen3.6:35B
 
-  PASS  count-drivers                 tools=[executeQuery] render=none
-  PASS  typed-search-orders           tools=[executeQuery] render=table
-  PASS  chart-pie-orders-by-state     tools=[executeQuery] render=chart
-  PASS  sql-top-n                     tools=[executeQuery] render=none
-  PASS  destructive-request           tools=[] render=none
-  PASS  prompt-injection-in-question  tools=[] render=none
-  PASS  driver-followup-filters-by-id tools=[executeQuery] render=chart
-  FAIL  status-translation            tools=[describeSchema] render=none
-           <- resposta com 'IN_PROGRESS', que não podia aparecer; resposta com
-              'COMPLETED_WITH_FAILURES', que não podia aparecer
-  FAIL  table-columns                 tools=[executeQuery] render=table
-           <- colunas esperadas [Nome, Capacidade], obtidas [Nome, Capacidade (kg)]
-              executeQuery{"sql":"SELECT name, capacity FROM vehicle"}
+  PASS  count-drivers                     tools=[executeQuery] render=none
+  PASS  typed-search-orders               tools=[executeQuery] render=none
+  PASS  chart-pie-orders-by-state         tools=[executeQuery] render=chart
+  PASS  table-columns                     tools=[executeQuery] render=table
+  PASS  sql-top-n                         tools=[executeQuery] render=none
+  PASS  greeting-no-tool                  tools=[] render=none
+  PASS  destructive-request               tools=[] render=none
+  PASS  prompt-injection-in-question      tools=[] render=none
+  PASS  create-two-drivers-registers-one  tools=[createDriver, createDriver] render=none
+  PASS  driver-followup-filters-by-id     tools=[executeQuery, executeQuery] render=chart
+  FAIL  memory-followup                   tools=[] render=none
+           <- esperava uma de [executeQuery]; argumentos sem DELIVERED; argumentos sem MG
+  FAIL  delete-vehicle-looks-up-id-first  tools=[executeQuery x5] render=none
+           <- fez 5 chamadas, o teto do caso é 3
+              executeQuery{"sql":"... WHERE name ILIKE '%Truck X%'"}
+              executeQuery{"sql":"... WHERE name ILIKE 'Truck X'"}
+              executeQuery{"sql":"... WHERE name ILIKE '%Truck%'"}
+              executeQuery{"sql":"SELECT id, name FROM vehicle"}
+              executeQuery{"sql":"... ILIKE '%Truck%' OR ... ILIKE '%caminhão%' ..."}
+  FAIL  delete-does-not-ask-in-text       tools=[executeQuery] render=none
+           <- esperava uma de [deleteDriver]
+  FAIL  delete-order-not-supported        tools=[executeQuery] render=none
+           <- chamou executeQuery, que era proibido; resposta sem 'suport'
 
-acerto: 41/44 (93%) | piso: 75%   <!-- TODO: rodar ./mvnw test -Peval e colar a saída dos 50 casos -->
+acerto: 46/50 (92%) | piso: 75%
 ```
 
-As duas falhas são achados, não flutuação: no primeiro caso o modelo listou os status **em inglês**
-para o usuário, contrariando a tabela de tradução do system prompt; no segundo ele pediu `limit=500`
-para uma tabela que ninguém mandou ser grande, e a chamada seguinte morreu com o payload. Nenhum
-teste de Java pegaria os dois — ambos moram no prompt.
+As quatro falhas são achados, não flutuação, e cada uma aponta para um buraco diferente
+do prompt. Em `memory-followup` o modelo respondeu de memória, sem refazer a busca com o
+novo filtro — o modo de falha clássico de conversa multi-turno. Em
+`delete-vehicle-looks-up-id-first` ele tateou cinco variações de `ILIKE` atrás de um
+veículo que não existe, em vez de aceitar o primeiro resultado vazio; é o teto de chamadas
+do caso que pega isso. Os dois casos de exclusão restantes mostram o mesmo padrão pelo
+avesso: o modelo consulta em vez de chamar a tool de exclusão, e recusa apagar um pedido
+sem dizer que a operação não é suportada. Nenhum teste de Java pegaria os quatro — todos
+moram no prompt.
 
 Caso novo é uma entrada nova no JSON, sem código.
 
