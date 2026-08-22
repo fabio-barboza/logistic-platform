@@ -96,9 +96,9 @@ class ToolSelectionEvalTest {
     private JwtDecoder jwtDecoder;
 
     /**
-     * Autentica como eval-user antes de rodar (ver EvalAuthentication) e desfaz depois — desde a
-     * fase 4 a perna agent -> /mcp exige token para qualquer tool de escrita, e desde a fase 5 a
-     * lista de tools que o modelo vê já sai filtrada pela role de quem chama.
+     * Autentica como eval-user antes de rodar (ver EvalAuthentication) e desfaz depois: a perna
+     * agent -> /mcp exige token para qualquer tool de escrita, e a lista de tools que o modelo vê
+     * já sai filtrada pela role de quem chama.
      */
     @BeforeEach
     void authenticateAsEvalUser() {

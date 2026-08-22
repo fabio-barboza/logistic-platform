@@ -42,7 +42,7 @@ public class EvalEnvironmentCondition implements ExecutionCondition {
                     (ou aponte para outro com -Deval.llm.url=<url>).
                     """.formatted(LLM_URL));
         }
-        // Desde a fase 4, a perna agent -> /mcp exige token: sem o Keycloak no ar, o eval falha
+        // A perna agent -> /mcp exige token: sem o Keycloak no ar, o eval falha
         // tarde (a meio do contexto do Spring, num JwtDecoder que resolve o issuer na criação do
         // bean) e com um erro que não aponta para a causa real.
         if (!reachable(KEYCLOAK_URL + "/realms/logistic/.well-known/openid-configuration")) {

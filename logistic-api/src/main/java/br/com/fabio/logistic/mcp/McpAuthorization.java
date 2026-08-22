@@ -21,8 +21,8 @@ import java.util.Set;
  * o {@code SecurityContextHolder}, que é ThreadLocal, está vazio lá. O {@link McpTransportContext}
  * viaja pelo Reactor Context e não depende de thread.
  *
- * <p>Reaproveita o {@link JwtDecoder} já configurado em {@code SecurityConfig} — o mesmo validador de
- * audience da fase 3. É essa validação que impede passthrough: um token do browser
+ * <p>Reaproveita o {@link JwtDecoder} já configurado em {@code SecurityConfig} — o mesmo validador
+ * de audience das requisições REST. É essa validação que impede passthrough: um token do browser
  * (aud=logistic-agent) é recusado aqui.
  */
 @Component

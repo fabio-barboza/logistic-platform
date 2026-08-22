@@ -153,7 +153,7 @@ class ConfirmationServiceTest {
     }
 
     /**
-     * Fase 5, item 2: a pendência é resgatada pela chave de conversa (sub + sessionId), não pelo
+     * A pendência é resgatada pela chave de conversa (sub + sessionId), não pelo
      * sessionId cru — resolve() computa essa chave a partir do usuário autenticado na requisição
      * de confirmação. Sem isso, o mesmo sessionId (sessionStorage forçado, ou coincidência)
      * resgataria a pendência de outro usuário.

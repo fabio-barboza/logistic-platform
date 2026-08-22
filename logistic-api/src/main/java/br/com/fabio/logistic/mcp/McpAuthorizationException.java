@@ -2,11 +2,10 @@ package br.com.fabio.logistic.mcp;
 
 /**
  * Chamador sem a role exigida por uma tool MCP. Vocabulário de scope OAuth (a spec do MCP fala em
- * scopes); o valor aqui é o nome de uma realm role do Keycloak (read/write) — ver
- * {@code plans/04-autorizacao-por-tool.md}.
+ * scopes); o valor aqui é o nome de uma realm role do Keycloak (read/write).
  *
- * <p><b>Delta em relação ao plano:</b> o plano previa 403 HTTP com {@code WWW-Authenticate} no
- * transporte. Verificado (curl direto em {@code /mcp}, sem stack de mais nada no meio): o
+ * <p><b>Por que isto não vira 403 HTTP</b>, que seria o esperado. Verificado (curl direto em
+ * {@code /mcp}, sem stack de mais nada no meio): o
  * {@code WebMvcStreamableServerTransportProvider} do Spring AI 2.0.0 despacha toda chamada de tool
  * — inclusive esta recusa — por {@code ServerResponse.sse(...)}, que já comitou HTTP 200 antes da
  * tool rodar. Uma exceção daqui não muda o status HTTP: vira {@code CallToolResult.isError(true)}

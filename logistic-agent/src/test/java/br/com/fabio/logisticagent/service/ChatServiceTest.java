@@ -280,7 +280,7 @@ class ChatServiceTest {
     }
 
     /**
-     * Fase 5, item 2: a chave da oferta pendente é a conversa (sub + sessionId), não o sessionId
+     * A chave da oferta pendente é a conversa (sub + sessionId), não o sessionId
      * cru. Sem isso, o "sim" de user-b resolveria a oferta feita a user-a só porque as duas abas
      * mandam o mesmo sessionId (ex.: sessionStorage forçado, ou coincidência).
      */

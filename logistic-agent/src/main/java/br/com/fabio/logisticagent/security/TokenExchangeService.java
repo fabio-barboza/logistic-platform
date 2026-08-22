@@ -23,7 +23,8 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Troca o token do usuário (aud=logistic-agent) por um com aud=logistic-api, via RFC 8693
  * (token exchange), para o agent falar com o /mcp da API sem fazer <i>token passthrough</i> —
- * proibido pela spec de autorização do MCP (ver plans/00-visao-geral.md).
+ * proibido pela spec de autorização do MCP ("MCP servers MUST NOT accept or transit any other
+ * tokens"), que é o vetor do confused deputy.
  *
  * <p><b>Peça de configuração que não é óbvia por código nenhum:</b> o Keycloak só coloca
  * {@code logistic-api} no {@code aud} do token trocado se o client <b>logistic-agent</b> (quem

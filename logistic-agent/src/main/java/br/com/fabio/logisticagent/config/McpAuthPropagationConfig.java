@@ -28,8 +28,8 @@ public class McpAuthPropagationConfig {
      * contextProvider.get())).block()}. A função do contextWrite roda na <b>subscrição</b>, que
      * com {@code .block()} é a thread chamadora — a mesma thread do servlet onde o
      * SecurityContextHolder está preenchido. É o único ponto do caminho MCP onde esse
-     * ThreadLocal ainda vale; a tool, do lado do servidor, já roda em outra thread (ver
-     * plans/00-visao-geral.md, seção de autorização das tools).
+     * ThreadLocal ainda vale; a tool, do lado do servidor, já roda em outra thread — é por isso
+     * que a autorização lá usa {@code McpTransportContext}, e não {@code @PreAuthorize}.
      */
     @Bean
     McpClientCustomizer<McpClient.SyncSpec> mcpAuthContextCustomizer(TokenExchangeService exchange) {
@@ -37,7 +37,7 @@ public class McpAuthPropagationConfig {
             Authentication auth = SecurityContextHolder.getContext().getAuthentication();
             if (!(auth instanceof JwtAuthenticationToken jwt)) {
                 // Handshake do startup (initialize/tools-list): não há usuário. Contexto vazio,
-                // sem header, e o /mcp permitAll da fase 3 deixa passar.
+                // sem header, e o permitAll do /mcp na API deixa passar.
                 return McpTransportContext.EMPTY;
             }
             return McpTransportContext.create(

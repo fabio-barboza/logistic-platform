@@ -1,7 +1,6 @@
-// Autenticação via Keycloak com Authorization Code + PKCE, em JS puro (sem lib) — decisão de
-// escopo do plano da fase 2: o fluxo cabe em poucas linhas e evita uma dependência de
-// segurança extra para manter. Se algum dia isso ficar mais custoso que o previsto, a
-// alternativa aceitável é `oidc-client-ts`.
+// Autenticação via Keycloak com Authorization Code + PKCE, em JS puro (sem lib): o fluxo cabe
+// em poucas linhas e evita uma dependência de segurança extra para manter. Se algum dia isso
+// ficar mais custoso que o previsto, a alternativa aceitável é `oidc-client-ts`.
 
 const KC_URL = import.meta.env.VITE_KEYCLOAK_URL ?? 'http://localhost:8090'
 const REALM = import.meta.env.VITE_KEYCLOAK_REALM ?? 'logistic'
@@ -209,8 +208,7 @@ async function refreshAccessToken() {
 // alguma coisa (enviar mensagem, confirmar ação). Se o token fosse renovado num timer
 // independente da atividade do usuário, o Keycloak nunca veria a sessão ociosa e o requisito
 // de 5 minutos de inatividade (SSO Session Idle) deixaria de valer — a aba ficaria logada
-// para sempre sozinha. Essa é exatamente a "melhoria" que alguém faria depois sem perceber
-// que quebra o requisito.
+// para sempre sozinha.
 async function getToken() {
     const expiresAt = Number(sessionStorage.getItem(SS_EXPIRES_AT) ?? '0')
     if (Date.now() < expiresAt - REFRESH_MARGIN_MS) {

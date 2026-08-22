@@ -35,7 +35,7 @@ class AuthenticatedUserTest {
     }
 
     /**
-     * O ponto central da fase 5, item 2: o mesmo sessionId, vindo de dois usuários diferentes,
+     * O ponto central do isolamento: o mesmo sessionId, vindo de dois usuários diferentes,
      * tem que virar duas chaves de conversa diferentes — senão o sessionId de um resolveria a
      * conversa (ou a pendência) do outro.
      */

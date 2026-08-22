@@ -98,7 +98,7 @@ public class SecurityConfig {
                         // O agent faz o handshake MCP no startup, FORA de qualquer requisicao HTTP e sem
                         // usuario nenhum. Exigir autenticacao aqui faria o agent subir sem tools e o chat
                         // responder "erro ao processar" (ver McpServerUnavailableFailureAnalyzer).
-                        // A autorizacao real das tools mora dentro delas — fase 4.
+                        // A autorizacao real das tools mora dentro delas (McpAuthorization).
                         .requestMatchers("/mcp/**", "/mcp").permitAll()
                         .requestMatchers("/actuator/health/**", "/actuator/health").permitAll()
                         .requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/api-docs/**").permitAll()

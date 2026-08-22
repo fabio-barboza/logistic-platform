@@ -17,16 +17,16 @@ import java.util.Map;
 
 /**
  * Autentica o eval como usuário de máquina antes de rodar — obtém um token real via direct grant
- * no client {@code logistic-eval} (usuário {@code eval-user}, criado na fase 1) e instala um
+ * no client {@code logistic-eval} (usuário {@code eval-user}) e instala um
  * {@link JwtAuthenticationToken} no {@link SecurityContextHolder}.
  *
- * <p>Desde a fase 4, a tool MCP nega toda chamada sem token (McpAuthorization, na logistic-api),
- * e desde a fase 5 (item 1) a lista de tools que o modelo vê já sai filtrada pela role de quem
- * está "logado" — sem isto, todo caso de escrita do dataset falharia por falta de tool, não por
- * escolha errada do modelo. eval-user tem a role {@code admin} (chat+read+write compostas), então
- * nenhum caso perde tool por permissão e o {@code tool-selection.json} não muda.
+ * <p>A tool MCP nega toda chamada sem token (McpAuthorization, na logistic-api), e a lista de
+ * tools que o modelo vê já sai filtrada pela role de quem está "logado" — sem isto, todo caso de
+ * escrita do dataset falharia por falta de tool, não por escolha errada do modelo. eval-user tem a
+ * role {@code admin} (chat+read+write compostas), então nenhum caso perde tool por permissão e o
+ * {@code tool-selection.json} não muda.
  *
- * <p><b>Não é um perfil que desliga a segurança</b> (regra inviolável do plano) — é o eval se
+ * <p><b>Não é um perfil que desliga a segurança</b> — é o eval se
  * autenticando de verdade, como qualquer outro chamador: o token passa pelo mesmo
  * {@link JwtDecoder} (issuer + audience) que valida requisições reais.
  *

@@ -49,11 +49,6 @@ public class ChatService {
             Pattern.CASE_INSENSITIVE);
 
     /**
-     * Linha de tabela markdown. Quando a resposta já tem render, o modelo ainda repetia os mesmos
-     * dados em markdown — a tela mostrava tabela e gráfico para uma pergunta que não pediu nenhum
-     * dos dois. O prompt proíbe a duplicação; isto garante.
-     */
-    /**
      * Aceite curto ("sim", "pode mandar", "quero"). Vale só quando a resposta anterior ofereceu a
      * visualização — o "sim" não tem palavra nenhuma de gráfico, e sem isto ele caía no caminho de
      * render bloqueado logo depois de o próprio agente ter oferecido o gráfico.
@@ -103,6 +98,11 @@ public class ChatService {
     /** Teto dos mapas por conversa: sessão é efêmera (novo id por load da página). */
     private static final int MAX_PENDING_OFFERS = 500;
 
+    /**
+     * Linha de tabela markdown. Quando a resposta já tem render, o modelo ainda repetia os mesmos
+     * dados em markdown — a tela mostrava a tabela duas vezes. O prompt proíbe a duplicação; isto
+     * garante.
+     */
     private static final Pattern MARKDOWN_TABLE = Pattern.compile(
             "(?m)^[ \\t]*\\|.*\\|[ \\t]*$(\\R|$)");
 

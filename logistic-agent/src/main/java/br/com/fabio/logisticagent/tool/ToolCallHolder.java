@@ -13,8 +13,8 @@ import java.util.List;
  * Existe porque o modelo responde perguntas de dados sem chamar tool nenhuma quando não é o
  * primeiro turno da sessão: "e em MG?" depois de "pedidos entregues em SP" devolveu uma listagem
  * inteira de MG — com cidade de SP dentro — e um total de 106 onde havia 423, com o log de tool
- * calls vazio nos dois casos. O system prompt já proíbe isso em letras maiúsculas e o modelo
- * ignora, então a checagem é aqui: "chamou tool ou não" é fato, não heurística sobre a pergunta.
+ * calls vazio nos dois casos. O system prompt já proíbe isso explicitamente e o modelo ignora,
+ * então a checagem é aqui: "chamou tool ou não" é fato, não heurística sobre a pergunta.
  * <p>
  * Escopo de requisição pelo mesmo motivo do {@link RenderHolder}: com escopo maior, o turno de um
  * usuário enxergaria as chamadas do turno de outro.
