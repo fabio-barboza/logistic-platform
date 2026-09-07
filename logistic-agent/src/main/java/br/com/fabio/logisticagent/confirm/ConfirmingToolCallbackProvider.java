@@ -59,12 +59,12 @@ public class ConfirmingToolCallbackProvider implements ToolCallbackProvider {
     static final int MAX_REJECTIONS = 2;
 
     private final ToolCallbackProvider delegate;
-    private final PendingActionStore store;
+    private final IPendingActionStore store;
     private final RequiredArgumentsCheck requiredArguments;
     private final DeletionTargetLookup deletionTarget;
     private final ObjectProvider<PendingActionHolder> holderProvider;
 
-    public ConfirmingToolCallbackProvider(ToolCallbackProvider delegate, PendingActionStore store,
+    public ConfirmingToolCallbackProvider(ToolCallbackProvider delegate, IPendingActionStore store,
             RequiredArgumentsCheck requiredArguments, DeletionTargetLookup deletionTarget,
             ObjectProvider<PendingActionHolder> holderProvider) {
         this.delegate = delegate;
@@ -183,7 +183,7 @@ public class ConfirmingToolCallbackProvider implements ToolCallbackProvider {
                 details = target.get();
             }
             PendingAction action = store.register(holder.sessionId(), toolName,
-                    toolInput == null ? "" : toolInput, delegate, details);
+                    toolInput == null ? "" : toolInput, details);
             holder.set(action);
             return registered();
         }

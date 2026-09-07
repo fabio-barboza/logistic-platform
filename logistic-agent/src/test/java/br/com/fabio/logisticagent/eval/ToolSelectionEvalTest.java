@@ -2,7 +2,7 @@ package br.com.fabio.logisticagent.eval;
 
 import br.com.fabio.logisticagent.dto.ChatMessageDTO;
 import br.com.fabio.logisticagent.dto.render.ChartContent;
-import br.com.fabio.logisticagent.dto.render.RenderableContent;
+import br.com.fabio.logisticagent.dto.render.IRenderableContent;
 import br.com.fabio.logisticagent.dto.render.TableContent;
 import br.com.fabio.logisticagent.service.ChatService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -234,7 +234,7 @@ class ToolSelectionEvalTest {
         return value == null ? "" : value;
     }
 
-    private String serialize(RenderableContent renderData) {
+    private String serialize(IRenderableContent renderData) {
         if (renderData == null) {
             return "";
         }
@@ -262,7 +262,7 @@ class ToolSelectionEvalTest {
         return fragment.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
     }
 
-    private static String renderTypeOf(RenderableContent renderData) {
+    private static String renderTypeOf(IRenderableContent renderData) {
         return switch (renderData) {
             case ChartContent ignored -> "chart";
             case TableContent ignored -> "table";

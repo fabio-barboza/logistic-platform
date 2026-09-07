@@ -8,6 +8,21 @@ spring:
       resourceserver:
         jwt:
           issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8090/realms/logistic}
+  datasource:
+    # Banco exclusivo do agent (container agentdb, ver docker-compose.yaml). Não é o banco de
+    # domínio: o agent não tem credencial nem acesso às tabelas do logistic-api, que continuam
+    # alcançáveis só pelas tools MCP.
+    url: ${AGENT_DB_URL:jdbc:postgresql://localhost:5433/agentdb}
+    username: ${AGENT_DB_USER:agent}
+    password: ${AGENT_DB_PASSWORD:agent}
+  jpa:
+    hibernate:
+      # Schema é do Flyway, como no logistic-api. validate pega drift entidade x migration.
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
   ai:
     openai:
       base-url: ${LLM_BASE_URL:http://localhost:8200}
@@ -30,6 +45,12 @@ spring:
     chat:
       observations:
         include-error-logging: true
+      memory:
+        repository:
+          jdbc:
+            # spring_ai_chat_memory vem da V1__agent_state.sql, não daqui (ver a migration). Fica
+            # em "always" como rede se um upgrade do Spring AI passar a exigir outra tabela.
+            initialize-schema: always
     mcp:
       client:
         type: SYNC
@@ -81,6 +102,15 @@ logistic:
     url: http://localhost:8081
     check-interval: 15000
     initial-delay: 5000
+  agent:
+    state-purge:
+      # A cada quanto tempo AgentStatePurge roda. DELETE idempotente por corte de tempo: não
+      # precisa de lock nem de líder único.
+      interval: 3600000
+      # Conversa sem mensagem nova há mais desse tempo é considerada abandonada e some da
+      # ChatMemory. pending_action (15min) e conversation_state (24h) usam prazo fixo — ver
+      # javadoc de AgentStatePurge.
+      chat-memory-ttl: 24h
   security:
     # Audiencia esperada no token que chega do browser. Validacao de audience e regra
     # inviolavel deste plano: sem ela, um token emitido para outro recurso seria aceito

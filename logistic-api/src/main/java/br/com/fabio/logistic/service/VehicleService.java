@@ -7,8 +7,8 @@ import br.com.fabio.logistic.dto.VehicleRequest;
 import br.com.fabio.logistic.dto.VehicleResponse;
 import br.com.fabio.logistic.exception.NotFoundException;
 import br.com.fabio.logistic.mapper.VehicleMapper;
-import br.com.fabio.logistic.repository.DriverVehicleRepository;
-import br.com.fabio.logistic.repository.VehicleRepository;
+import br.com.fabio.logistic.repository.IDriverVehicleRepository;
+import br.com.fabio.logistic.repository.IVehicleRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -20,12 +20,12 @@ import java.util.UUID;
 @Service
 public class VehicleService {
 
-    private final VehicleRepository vehicleRepository;
-    private final DriverVehicleRepository driverVehicleRepository;
+    private final IVehicleRepository vehicleRepository;
+    private final IDriverVehicleRepository driverVehicleRepository;
     private final VehicleMapper vehicleMapper;
 
-    public VehicleService(VehicleRepository vehicleRepository,
-                          DriverVehicleRepository driverVehicleRepository,
+    public VehicleService(IVehicleRepository vehicleRepository,
+                          IDriverVehicleRepository driverVehicleRepository,
                           VehicleMapper vehicleMapper) {
         this.vehicleRepository = vehicleRepository;
         this.driverVehicleRepository = driverVehicleRepository;

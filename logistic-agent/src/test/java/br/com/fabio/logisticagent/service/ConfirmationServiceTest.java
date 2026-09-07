@@ -1,7 +1,8 @@
 package br.com.fabio.logisticagent.service;
 
+import br.com.fabio.logisticagent.confirm.InMemoryPendingActionStore;
 import br.com.fabio.logisticagent.confirm.PendingAction;
-import br.com.fabio.logisticagent.confirm.PendingActionStore;
+import br.com.fabio.logisticagent.confirm.IPendingActionStore;
 import br.com.fabio.logisticagent.dto.ChatMessageDTO;
 import br.com.fabio.logisticagent.dto.ConfirmRequestDTO;
 import br.com.fabio.logisticagent.security.AuthenticatedUser;
@@ -13,6 +14,7 @@ import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -30,17 +32,29 @@ class ConfirmationServiceTest {
 
     private final List<String> executed = new ArrayList<>();
 
-    private PendingActionStore store;
+    private IPendingActionStore store;
     private ChatMemory chatMemory;
     private ConfirmationService confirmationService;
 
+    /**
+     * A tool "createDriver" que o {@code ToolCallbackProvider} abaixo devolve. Mutável porque cada
+     * teste chama {@link #register} com um comportamento diferente, e o provider é lido de novo a
+     * cada {@code resolve()} — o mesmo padrão real de {@code ConfirmationService}, que resolve o
+     * callback pelo nome só na hora de confirmar, nunca guardado no {@code PendingAction}.
+     */
+    private ToolCallback currentCallback;
+
     @BeforeEach
     void setUp() {
-        store = new PendingActionStore();
+        store = new InMemoryPendingActionStore();
         chatMemory = MessageWindowChatMemory.builder()
                 .chatMemoryRepository(new InMemoryChatMemoryRepository())
                 .build();
-        confirmationService = new ConfirmationService(store, chatMemory, JsonMapper.builder().build());
+        ToolCallbackProvider mcpToolCallbacks = () -> currentCallback == null
+                ? new ToolCallback[0]
+                : new ToolCallback[] {currentCallback};
+        confirmationService = new ConfirmationService(store, chatMemory, JsonMapper.builder().build(),
+                mcpToolCallbacks);
     }
 
     @AfterEach
@@ -59,7 +73,7 @@ class ConfirmationServiceTest {
     }
 
     private PendingAction register(String key, UnaryOperator<String> body) {
-        ToolCallback callback = new ToolCallback() {
+        currentCallback = new ToolCallback() {
 
             @Override
             public ToolDefinition getToolDefinition() {
@@ -72,7 +86,7 @@ class ConfirmationServiceTest {
                 return body.apply(toolInput);
             }
         };
-        return store.register(key, "createDriver", "{\"name\":\"João\"}", callback);
+        return store.register(key, "createDriver", "{\"name\":\"João\"}");
     }
 
     private String memory() {
@@ -180,6 +194,27 @@ class ConfirmationServiceTest {
 
         assertThat(executed).containsExactly("{\"name\":\"João\"}");
         assertThat(okResponse.content()).contains("executada");
+    }
+
+    /**
+     * Quem recebe o clique pode não ter a tool no handshake MCP do próprio startup (API fora do ar
+     * quando ele subiu). A mensagem tem que dizer "indisponível", e não "ação não encontrada": são
+     * causas diferentes e o usuário reage diferente a cada uma.
+     */
+    @Test
+    void unresolvableToolReportsBackendUnavailableInsteadOfActionNotFound() {
+        PendingAction action = register(input -> {
+            executed.add(input);
+            return "ok";
+        });
+        currentCallback = null; // createDriver não está na lista de tools desta instância
+
+        ChatMessageDTO response = confirmationService.resolve(
+                new ConfirmRequestDTO("sessao-1", action.id(), true));
+
+        assertThat(executed).isEmpty();
+        assertThat(response.content()).contains("indisponível");
+        assertThat(memory()).contains("indisponível");
     }
 
     /** Retorno que não é JSON (as tools de vínculo devolvem frase) passa intacto. */

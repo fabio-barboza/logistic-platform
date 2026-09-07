@@ -25,7 +25,7 @@ public final class AuthenticatedUser {
      * Chave de conversa isolada por usuário: {@code sub} + o sessionId que o cliente mandou.
      *
      * <p>O sessionId nasce no JavaScript ({@code generateSessionId()} no main.js) e o agent
-     * confiava nele como chave única da ChatMemory e do PendingActionStore. Com autenticação,
+     * confiava nele como chave única da ChatMemory e do IPendingActionStore. Com autenticação,
      * mandar o sessionId de outra pessoa passaria a ler (ou resgatar) a conversa/pendência dela —
      * o sessionId sozinho não distingue usuários. Prefixar pelo sub fecha isso: o id de outro
      * usuário simplesmente não resolve, porque o sub dele é outro.

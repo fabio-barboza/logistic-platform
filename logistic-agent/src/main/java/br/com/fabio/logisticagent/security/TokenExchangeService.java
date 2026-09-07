@@ -62,7 +62,7 @@ public class TokenExchangeService {
     /**
      * Chaveado pelo jti (ou sub+exp, se o jti não vier) do token de <b>entrada</b> — nunca pelo
      * sub sozinho, senão o token trocado sobreviveria ao logout do usuário. Igual em espírito ao
-     * PendingActionStore: ConcurrentHashMap com purga por TTL, sem trazer biblioteca de cache.
+     * IPendingActionStore: ConcurrentHashMap com purga por TTL, sem trazer biblioteca de cache.
      */
     private final Map<String, CachedToken> cache = new ConcurrentHashMap<>();
 

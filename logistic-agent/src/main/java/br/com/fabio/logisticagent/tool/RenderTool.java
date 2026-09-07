@@ -9,15 +9,24 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 /**
- * Provides the LLM with tools to signal that a response should be rendered
- * as a chart or table instead of plain text. Render data is stored in the
- * request-scoped RenderHolder and consumed by ChatService after the ChatClient call.
+ * Desenha gráfico ou tabela a partir do resultado do último executeQuery da requisição.
+ *
+ * <p><b>O modelo escolhe o que mostrar; nunca os valores.</b> Ele informa o tipo do gráfico e quais
+ * colunas usar, e os números saem do {@link QueryResultHolder} — as linhas que o banco devolveu.
+ * Antes o modelo digitava {@code labels} e {@code data} nos argumentos, e dado inventado na tela
+ * era possível: a tool não tinha como saber se aquele 68 tinha vindo de algum lugar. Agora não é
+ * detectado, é impossível.
+ *
+ * <p>Isso apagou junto toda a máquina de recusa que existia por causa de argumento inválido
+ * (tamanho de labels diferente do de data, linha com menos células que colunas, o teto de recusas
+ * e o render truncado de último recurso): sem valores nos argumentos, não há o que validar. Erro
+ * de coluna continua possível e é devolvido com a lista de colunas reais, que o modelo consegue
+ * corrigir numa tentativa.
  */
 @Component
 public class RenderTool {
@@ -26,20 +35,9 @@ public class RenderTool {
     private static final Set<String> VALID_CHART_TYPES = Set.of("bar", "line", "pie", "doughnut");
 
     /**
-     * Teto de recusas por requisição. A crítica devolvida como retorno de tool é o que faz o modelo
-     * se corrigir, mas com temperatura baixa ele reenvia a MESMA chamada e a crítica vira um loop:
-     * o loop de tool calls do Spring AI não tem limite de rodadas, e uma requisição já rodou 172
-     * recusas idênticas em 26 minutos até estourar o contexto. Passado o teto, a tool para de pedir
-     * correção e manda o modelo desistir do render nesta resposta.
-     */
-    private static final int MAX_REJECTIONS = 2;
-
-    /**
      * Status em PT-BR para o que vai desenhado na tela. O system prompt manda traduzir, mas o modelo
-     * traduz o texto da resposta e copia o enum cru para as células da tabela e os rótulos do
-     * gráfico — a tela mostrava "DELIVERED" ao lado de "Entregue" na mesma resposta. Tradução de
-     * enum é determinística, então é código, não instrução. Mantenha em sincronia com o system
-     * prompt e com V1__init.sql.
+     * traduzia o texto da resposta e deixava o enum cru na tela. Tradução de enum é determinística,
+     * então é código. Mantenha em sincronia com o system prompt e com V1__init.sql.
      */
     private static final Map<String, String> STATUS_PT = Map.ofEntries(
             Map.entry("IN_PROGRESS", "Em andamento"),
@@ -52,17 +50,21 @@ public class RenderTool {
             Map.entry("DELIVER_FAILURE", "Falha na entrega"));
 
     private final RenderHolder renderHolder;
+    private final QueryResultHolder queryResults;
 
-    public RenderTool(RenderHolder renderHolder) {
+    public RenderTool(RenderHolder renderHolder, QueryResultHolder queryResults) {
         this.renderHolder = renderHolder;
+        this.queryResults = queryResults;
     }
 
     @Tool(description = """
-            Use esta tool para renderizar dados como um gráfico no frontend.
-            Chame-a apenas quando o usuário pedir um gráfico, chart ou visualização gráfica de dados
-            numéricos. Cada resposta desenha no máximo uma visualização: se já chamou renderTable
-            nesta resposta, não chame esta.
-            Escolha o chartType mais adequado para os dados:
+            Desenha um gráfico com o resultado da última consulta que você fez por executeQuery.
+            Você não envia os dados: informa quais colunas do resultado usar, e o gráfico é montado
+            a partir das linhas que o banco devolveu.
+            Consulte primeiro com executeQuery, depois chame esta tool com os nomes de coluna
+            exatamente como aparecem no resultado (ex.: city, falhas).
+            Cada resposta desenha no máximo uma visualização.
+            Escolha o chartType mais adequado:
               - bar: comparação entre categorias
               - line: evolução ao longo do tempo ou sequência
               - pie: proporção de um todo (até ~6 categorias)
@@ -71,188 +73,84 @@ public class RenderTool {
     public String renderChart(
             @ToolParam(description = "Título descritivo do gráfico") String title,
             @ToolParam(description = "Tipo do gráfico: bar, line, pie ou doughnut") String chartType,
-            @ToolParam(description = "Rótulos do eixo X ou categorias, ex: [\"SP\",\"RJ\",\"MG\"]") List<String> labels,
-            @ToolParam(description = "Datasets, ex: [{\"label\":\"Entregas\",\"data\":[42,30,25]}]") List<Dataset> datasets
+            @ToolParam(description = "Coluna do resultado usada como rótulo, ex: city") String labelColumn,
+            @ToolParam(description = "Coluna numérica do resultado usada como valor, ex: falhas") String valueColumn,
+            @ToolParam(description = "Legenda da série, ex: Falhas por cidade") String seriesLabel
     ) {
-        String refusal = policyRefusal("renderChart", "gráfico");
-        if (refusal != null) {
-            return refusal;
+        if (queryResults.isEmpty()) {
+            return "Nenhum resultado de consulta nesta resposta. Chame executeQuery antes de renderizar.";
         }
         if (!VALID_CHART_TYPES.contains(chartType)) {
-            return reject("chartType inválido: '" + chartType + "'. Use bar, line, pie ou doughnut.");
+            return "chartType inválido: '" + chartType + "'. Use bar, line, pie ou doughnut.";
         }
-        if (labels == null || labels.isEmpty()) {
-            return reject("labels está vazio. Envie um rótulo por categoria, ex: [\"SP\",\"RJ\",\"MG\"].");
+        String columnProblem = checkColumns(labelColumn, valueColumn);
+        if (columnProblem != null) {
+            return columnProblem;
         }
-        if (datasets == null || datasets.isEmpty()) {
-            return reject("datasets está vazio. Envie ao menos uma série, ex: [{\"label\":\"Pedidos\",\"data\":[42,30,25]}].");
-        }
-        for (Dataset dataset : datasets) {
-            if (dataset.data() == null || dataset.data().isEmpty()) {
-                return reject("O dataset '" + dataset.label() + "' está sem data. Envie um número por rótulo de labels.");
-            }
-            if (dataset.data().size() != labels.size()) {
-                String problem = "O dataset '" + dataset.label() + "' tem " + dataset.data().size()
-                        + " valores, mas labels tem " + labels.size() + " rótulos.";
-                if (!lastChance()) {
-                    return reject(problem + " Reenvie com um valor para cada rótulo, sem omitir categorias.");
-                }
-                return renderTruncated(title, chartType, labels, datasets, problem);
-            }
-        }
-        renderHolder.set(new ChartContent(title, chartType, translateAll(labels), datasets));
-        log.info("Gráfico preparado: type={}, labels={}", chartType, labels.size());
-        // O aviso final existe porque o modelo, ao ser pedido para trocar o tipo do gráfico,
-        // respondia "aqui está em barras" sem chamar a tool de novo — e a tela ficava sem gráfico.
-        return "Gráfico preparado para renderização no frontend. Vale só para esta resposta: "
-                + "para trocar o tipo ou os dados, chame renderChart de novo.";
+        List<String> labels = translateAll(queryResults.column(labelColumn));
+        List<Number> values = numbers(queryResults.column(valueColumn));
+        String label = seriesLabel == null || seriesLabel.isBlank() ? valueColumn : seriesLabel;
+        renderHolder.set(new ChartContent(title, chartType, labels, List.of(new Dataset(label, values))));
+        log.info("Gráfico preparado a partir da consulta: type={}, {} categorias", chartType, labels.size());
+        return "Gráfico preparado com " + labels.size() + " categorias do resultado da consulta. "
+                + "Vale só para esta resposta; para trocar o tipo, chame renderChart de novo.";
     }
 
     @Tool(description = """
-            Use esta tool para renderizar dados como uma tabela formatada no frontend.
-            Chame-a apenas quando o usuário pedir explicitamente uma tabela ou uma listagem
-            formatada. Pergunta respondida por um número ou por poucas linhas de texto não
-            precisa de tabela. Cada resposta desenha no máximo uma visualização: se já chamou
-            renderChart nesta resposta, não chame esta.
+            Desenha uma tabela com o resultado da última consulta que você fez por executeQuery.
+            Você não envia os dados: informa quais colunas do resultado mostrar, na ordem desejada,
+            e a tabela é montada a partir das linhas que o banco devolveu.
+            Use os nomes de coluna exatamente como aparecem no resultado (ex.: name, city, falhas).
+            Cada resposta desenha no máximo uma visualização.
             """)
     public String renderTable(
             @ToolParam(description = "Título da tabela") String title,
-            @ToolParam(description = "Nomes das colunas, ex: [\"Estado\",\"Entregas\",\"Status\"]") List<String> columns,
-            @ToolParam(description = "Uma linha por registro, cada uma com um valor por coluna na ordem de "
-                    + "columns. Ex: [[\"SP\",\"42\",\"DELIVERED\"],[\"RJ\",\"30\",\"IN_ROUTE\"]]") List<List<String>> rows
+            @ToolParam(description = "Colunas do resultado a exibir, na ordem, ex: [\"city\",\"falhas\"]")
+            List<String> columns
     ) {
-        String refusal = policyRefusal("renderTable", "tabela");
-        if (refusal != null) {
-            return refusal;
+        if (queryResults.isEmpty()) {
+            return "Nenhum resultado de consulta nesta resposta. Chame executeQuery antes de renderizar.";
         }
         if (columns == null || columns.isEmpty()) {
-            return reject("columns está vazio. Envie os nomes das colunas, ex: [\"Estado\",\"Entregas\"].");
+            return "columns está vazio. Informe quais colunas do resultado mostrar. "
+                    + available();
         }
-        if (rows == null || rows.isEmpty()) {
-            return reject("rows está vazio. Envie uma linha por registro, com um valor por coluna.");
+        String columnProblem = checkColumns(columns.toArray(new String[0]));
+        if (columnProblem != null) {
+            return columnProblem;
         }
-        for (int i = 0; i < rows.size(); i++) {
-            List<String> row = rows.get(i);
-            if (row == null || row.size() != columns.size()) {
-                String problem = "A linha " + (i + 1) + " tem " + (row == null ? 0 : row.size())
-                        + " valores, mas columns tem " + columns.size() + " colunas.";
-                if (!lastChance()) {
-                    return reject(problem + " Reenvie com um valor por coluna, na ordem de columns.");
-                }
-                return renderAdjusted(title, columns, rows, problem);
-            }
-        }
-        renderHolder.set(new TableContent(title, columns, translateRows(rows)));
-        log.info("Tabela preparada: {} colunas, {} linhas", columns.size(), rows.size());
-        return "Tabela preparada para renderização no frontend. Vale só para esta resposta: "
-                + "para trocar as colunas ou os dados, chame renderTable de novo.";
+        List<List<String>> rows = queryResults.rows().stream()
+                .map(row -> translateAll(columns.stream().map(c -> row.getOrDefault(c, "")).toList()))
+                .toList();
+        renderHolder.set(new TableContent(title, columns, rows));
+        log.info("Tabela preparada a partir da consulta: {} colunas, {} linhas", columns.size(), rows.size());
+        return "Tabela preparada com " + rows.size() + " linhas do resultado da consulta. "
+                + "Vale só para esta resposta; para trocar as colunas, chame renderTable de novo.";
     }
 
-    /**
-     * Recusas de política — render não pedido, ou segunda visualização na mesma resposta. Devolve a
-     * crítica para o modelo, ou null quando ele já insistiu demais e a chamada deve passar.
-     *
-     * <p>Ceder no teto não é detalhe: recusa que só repete a crítica não encerra o loop de tool calls
-     * do Spring AI (que não tem limite de rodadas), e o modelo determinístico reenvia a MESMA chamada
-     * — uma pergunta real rodou 182 recusas idênticas até travar. Só um retorno de sucesso encerra.
-     * Quem insiste até o teto costuma ter razão: é o usuário que respondeu "sim" à oferta de gráfico
-     * numa mensagem que o ChatService não reconheceu como pedido.
-     */
-    private String policyRefusal(String tool, String tipo) {
-        if (!renderHolder.isRenderAllowed()) {
-            if (yielding(tool)) {
-                return null;
+    /** Coluna inexistente é o único erro de argumento que sobrou — e ele se corrige com a lista real. */
+    private String checkColumns(String... names) {
+        for (String name : names) {
+            if (!queryResults.hasColumn(name)) {
+                return "A coluna '" + name + "' não existe no resultado da consulta. " + available();
             }
-            return ignore(tool, "O usuário não pediu " + tipo + " nesta pergunta, então a chamada foi "
-                    + "ignorada e nada será desenhado na tela. Responda em texto e, se achar útil, "
-                    + "ofereça a visualização (ex.: \"posso mostrar isso em gráfico, se quiser\"). "
-                    + "Se o usuário já tinha pedido, chame de novo que a visualização passa.");
-        }
-        if (renderHolder.get() != null) {
-            if (yielding(tool)) {
-                return null;
-            }
-            return ignore(tool, "Esta resposta já tem uma visualização preparada e cada resposta desenha "
-                    + "no máximo uma. A chamada foi ignorada: vale a visualização já preparada. Não chame "
-                    + tool + " de novo agora — responda em texto, sem anunciar uma segunda visualização.");
         }
         return null;
     }
 
-    /** Insistiu até o teto? Então a chamada passa — é o que encerra o loop. */
-    private boolean yielding(String tool) {
-        if (renderHolder.rejections() + 1 < MAX_REJECTIONS) {
-            return false;
-        }
-        renderHolder.registerIgnored();
-        log.warn("{} aceita por insistência após {} recusas de política", tool, MAX_REJECTIONS);
-        return true;
+    private String available() {
+        return "Colunas disponíveis: " + String.join(", ", queryResults.columns()) + ".";
     }
 
-    private String ignore(String tool, String message) {
-        int rejections = renderHolder.registerIgnored();
-        log.info("{} ignorada ({}/{}): {}", tool, rejections, MAX_REJECTIONS, message);
-        return message;
-    }
-
-    /** Já gastou as tentativas de correção desta requisição? Então nada de pedir outra. */
-    private boolean lastChance() {
-        return renderHolder.rejections() + 1 >= MAX_REJECTIONS;
-    }
-
-    /**
-     * Render de último recurso quando labels e data não batem: casa os dois pelo menor tamanho e
-     * desenha. Perde as categorias sobrando, mas encerra o loop — e a mensagem manda o modelo
-     * avisar o usuário de que o gráfico saiu parcial.
-     */
-    private String renderTruncated(String title, String chartType, List<String> labels,
-            List<Dataset> datasets, String problem) {
-        int size = datasets.stream()
-                .mapToInt(dataset -> dataset.data() == null ? 0 : dataset.data().size())
-                .min()
-                .orElse(0);
-        size = Math.min(size, labels.size());
-        if (size == 0) {
-            return reject(problem + " Não há valores para desenhar. Responda ao usuário sem prometer gráfico.");
-        }
-        int cut = size;
-        List<Dataset> trimmed = datasets.stream()
-                .map(dataset -> new Dataset(dataset.label(), dataset.data().subList(0, cut)))
-                .toList();
-        renderHolder.set(new ChartContent(title, chartType, translateAll(labels.subList(0, cut)), trimmed));
-        log.warn("Gráfico truncado após {} recusas: {} categorias de {}", MAX_REJECTIONS, cut, labels.size());
-        return problem + " Depois de " + MAX_REJECTIONS + " tentativas, o gráfico foi desenhado com as "
-                + cut + " primeiras categorias. Não chame renderChart de novo nesta resposta: diga ao "
-                + "usuário que a visualização saiu parcial por inconsistência nos dados.";
-    }
-
-    /**
-     * Mesma ideia da renderTruncated, para tabela: cada linha é cortada ou completada com "-" até
-     * ter um valor por coluna.
-     */
-    private String renderAdjusted(String title, List<String> columns, List<List<String>> rows, String problem) {
-        List<List<String>> adjusted = rows.stream().map(row -> {
-            List<String> values = new ArrayList<>(row == null ? List.of() : row);
-            while (values.size() < columns.size()) {
-                values.add("-");
+    /** Célula não numérica vira 0: o gráfico desenha, e o modelo vê pelo resultado que errou a coluna. */
+    private List<Number> numbers(List<String> values) {
+        return values.stream().map(value -> {
+            try {
+                return (Number) Double.valueOf(value.replace(",", "."));
+            } catch (NumberFormatException e) {
+                return (Number) 0;
             }
-            return List.copyOf(values.subList(0, columns.size()));
         }).toList();
-        renderHolder.set(new TableContent(title, columns, translateRows(adjusted)));
-        log.warn("Tabela ajustada após {} recusas: {} linhas normalizadas para {} colunas",
-                MAX_REJECTIONS, adjusted.size(), columns.size());
-        return problem + " Depois de " + MAX_REJECTIONS + " tentativas, a tabela foi desenhada com as "
-                + "linhas ajustadas ao número de colunas. Não chame renderTable de novo nesta resposta: "
-                + "diga ao usuário que a tabela saiu ajustada por inconsistência nos dados.";
-    }
-
-    /**
-     * Registra a crítica no holder e devolve a mesma mensagem ao modelo. O holder guarda o erro
-     * porque o modelo às vezes ignora a crítica e anuncia o gráfico mesmo assim — aí é o
-     * ChatService que desmente a resposta.
-     */
-    private List<List<String>> translateRows(List<List<String>> rows) {
-        return rows.stream().map(this::translateAll).toList();
     }
 
     private List<String> translateAll(List<String> values) {
@@ -265,16 +163,5 @@ public class RenderTool {
             return null;
         }
         return STATUS_PT.getOrDefault(value.strip().toUpperCase(), value);
-    }
-
-    private String reject(String message) {
-        int rejections = renderHolder.registerRejection(message);
-        log.info("Render rejeitado ({}/{}): {}", rejections, MAX_REJECTIONS, message);
-        if (rejections >= MAX_REJECTIONS) {
-            return message + " Esta foi a última tentativa de render desta resposta: não chame "
-                    + "renderChart nem renderTable de novo agora. Responda ao usuário que não foi "
-                    + "possível montar a visualização com esses dados, sem prometer gráfico ou tabela.";
-        }
-        return message;
     }
 }

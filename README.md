@@ -136,14 +136,15 @@ logistic-api (Spring Boot :8081)
     │                │
     │            Repository (JPA)   +   QueryService (conexão na role logistic_ro)
     ▼
-PostgreSQL 18 :5432             ← docker compose (raiz) + Flyway
+PostgreSQL 18 :5432             ← docker compose (raiz) + Flyway   (domínio)
+PostgreSQL 18 :5433             ← docker compose (raiz) + Flyway   (estado do agent)
 ```
 
 ### Decisões de arquitetura
 
 | Decisão | Por quê |
 |---------|---------|
-| **A LLM nunca toca o banco** | O modelo só enxerga *tools*, não tabelas. Quem executa SQL é sempre a `logistic-api`. O `logistic-agent` sequer tem datasource no `pom.xml` — precisou de dado novo? Nasce uma tool MCP, não um repositório no agente. |
+| **A LLM nunca toca o banco** | O modelo só enxerga *tools*, não tabelas. Quem executa SQL de domínio é sempre a `logistic-api`. O `logistic-agent` tem datasource próprio, mas só para o **seu** estado operacional (chat memory, pendência de confirmação) — dado de domínio novo? Nasce uma tool MCP, não um repositório no agente. |
 | **MCP em vez de tools hardcoded** | As ferramentas vivem junto do domínio que elas servem. O agente as descobre no startup; adicionar um caso de uso na API o disponibiliza para a LLM sem recompilar o agente. |
 | **Controller REST e tools MCP como adaptadores irmãos** | Ambos são camadas finas sobre o mesmo `service/`. A regra de negócio existe uma vez só e vale igual para humano (Swagger) e para modelo (MCP). |
 | **`executeQuery` blindado por `GRANT`, não por regex** | Para as perguntas que nenhuma tool específica cobre, a LLM escreve o `SELECT`. A garantia de que ela não escreve no banco é uma role Postgres read-only (`logistic_ro`) com `statement_timeout` — defesa no lugar certo, não em validação de string. |
@@ -159,7 +160,7 @@ PostgreSQL 18 :5432             ← docker compose (raiz) + Flyway
 | Diretório | Stack | Porta | Responsabilidade |
 |-----------|-------|-------|------------------|
 | [`logistic-webui/`](logistic-webui/README.md) | Vite 8, Chart.js 4, marked (JS puro) | 5173 | Chat no browser; login com PKCE, renderiza markdown, tabela e gráfico |
-| [`logistic-agent/`](logistic-agent/README.md) | Java 21, Spring Boot 4, Spring AI (MCP client) | 8080 | Conversa com a LLM, descobre as tools MCP, troca o token, monta o `renderData` |
+| [`logistic-agent/`](logistic-agent/README.md) | Java 21, Spring Boot 4, Spring AI (MCP client), JPA, Flyway | 8080 | Conversa com a LLM, descobre as tools MCP, troca o token, monta o `renderData`; persiste seu próprio estado (chat memory, pendência de confirmação) no banco `agentdb` |
 | [`logistic-api/`](logistic-api/README.md) | Java 21, Spring Boot 4, JPA, Flyway, MCP server | 8081 | Dono do domínio e do banco; expõe REST + tools MCP com autorização por role |
 | Keycloak (`quay.io/keycloak/keycloak:26.7`) | Realm `logistic`, importado no primeiro boot | 8090 | Emite e valida os tokens das três apps; tela de login com o tema da aplicação |
 
@@ -195,7 +196,7 @@ nos containers — para o container, preserva o volume do banco.
 
 ### O que ele faz, em ordem — e por que a ordem importa
 
-1. **Checa pré-requisitos e portas.** Java, Node, Docker, e as portas 5432, 8090, 8081, 8080, 5173.
+1. **Checa pré-requisitos e portas.** Java, Node, Docker, e as portas 5432, 5433, 8090, 8081, 8080, 5173.
    Container da stack já de pé é reaproveitado, não é motivo de erro.
 2. **Sobe o Postgres e o Keycloak** (`docker compose up -d`) e espera os dois ficarem prontos — o
    Keycloak pelo `/health/ready` na porta de management (9000). No **primeiro** boot ele importa o
@@ -256,7 +257,7 @@ normais do mesmo browser compartilham o Keycloak logado.
 | *(nenhuma)* | *(nenhuma)* | sobe tudo **sem compilar**, semeia **se o banco estiver vazio** |
 | `--build` | `-Build` | recompila api e agent, e roda `npm install` no webui |
 | `--no-build` | `-NoBuild` | nunca compila: falha se faltar jar ou `node_modules` |
-| `--reset` | `-Reset` | limpa o banco e reinsere o `dados.sql`, mesmo populado. Pede confirmação (`s/N`) |
+| `--reset` | `-Reset` | limpa o banco e reinsere o `dados.sql`, mesmo populado; também limpa o `agentdb` (conversas, pendências, ofertas de gráfico). Pede confirmação (`s/N`) |
 | `--no-seed` | `-NoSeed` | nunca semeia, nem com banco vazio |
 | `--yes` | `-Yes` | pula a confirmação do `--reset` |
 | `--help` | `-Help` | imprime a tabela de flags |
@@ -273,6 +274,10 @@ Comportamentos que não são óbvios:
 - **`--reset` gera um dataset diferente a cada execução.** O seed usa `random()` na distribuição
   de rotas e pedidos, então os gráficos mudam. É reset de **dados**, não de estrutura: o schema
   e o histórico do Flyway ficam intactos.
+- **`--reset` também limpa o `agentdb`.** Sem isso, conversas, pendências de confirmação e
+  ofertas de gráfico antigas ficariam referenciando motoristas e veículos que o reset acabou de
+  apagar. A limpeza roda depois do `logistic-agent` subir (é o Flyway dele que cria as tabelas) e
+  usa a mesma confirmação do reset de dados — não pergunta duas vezes.
 
 ### Subida manual
 
@@ -298,7 +303,7 @@ cd logistic-webui && npm install && npm run dev
 
 ## Em detalhe
 
-Duas partes do projeto têm documento próprio, porque cada uma é uma discussão inteira:
+Partes do projeto têm documento próprio, porque cada uma é uma discussão inteira:
 
 | Documento | O que tem lá |
 |-----------|--------------|
@@ -343,6 +348,7 @@ tools de escrita nem chegam ao modelo.
 | `AVISO: LLM não respondeu` | modelo fora do ar | suba o `qwen3.6:35b` em `http://localhost:8200`; a stack não precisa reiniciar |
 | chat responde "erro ao processar" | agent subiu sem as tools MCP | confira `logs/logistic-agent.log`; a API tem que estar respondendo `/actuator/health` **antes** do agent |
 | `logistic-api não subiu em 90s` | Flyway falhou, banco inacessível — ou o Keycloak não estava no ar (o `JwtDecoder` resolve o issuer no boot) | `tail -n 50 logs/logistic-api.log` |
+| `logistic-agent não subiu em 90s` | O agent tem banco próprio (`agentdb`, container em 5433) — Flyway falha se ele não estiver acessível | `tail -n 50 logs/logistic-agent.log` |
 | login redireciona e volta com `invalid redirect_uri` | webui rodando em porta/host diferente do registrado no realm | o client `logistic-webui` aceita `http://localhost:5173/*`; use exatamente essa URL |
 | `401` no `POST /api/chat` | token expirado ou de outra audiência | recarregue a página (o webui refaz o fluxo); confira que o realm é o `logistic` |
 | a tela de login voltou a ser a do Keycloak, sem a marca | `loginTheme` não aplicado — realm importado antes do tema existir | `docker compose down -v` e suba de novo, ou ajuste **Realm settings → Themes** na UI |

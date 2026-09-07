@@ -5,10 +5,11 @@ import br.com.fabio.logisticagent.confirm.PendingActionHolder;
 import br.com.fabio.logisticagent.confirm.PendingActionMapper;
 import br.com.fabio.logisticagent.dto.ChatMessageDTO;
 import br.com.fabio.logisticagent.dto.PendingActionDTO;
-import br.com.fabio.logisticagent.dto.render.RenderableContent;
+import br.com.fabio.logisticagent.dto.render.IRenderableContent;
 import br.com.fabio.logisticagent.config.ChatClientConfig;
 import br.com.fabio.logisticagent.security.AuthenticatedUser;
 import br.com.fabio.logisticagent.tool.RenderHolder;
+import br.com.fabio.logisticagent.tool.RenderTool;
 import br.com.fabio.logisticagent.tool.ToolCallHolder;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
@@ -21,32 +22,12 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 @Service
 public class ChatService {
 
     private static final Logger log = LoggerFactory.getLogger(ChatService.class);
-
-    /**
-     * Palavras que o modelo usa ao anunciar uma visualização. Serve só para detectar a resposta que
-     * afirma um gráfico/tabela sem ter chamado a tool — o retry corretivo é disparado a partir daí.
-     */
-    private static final Pattern VISUAL_CLAIM = Pattern.compile(
-            "gr[áa]fico|chart|tabela|pizza|rosca|donut|doughnut", Pattern.CASE_INSENSITIVE);
-
-    /**
-     * O usuário pediu uma visualização? Só então renderChart/renderTable podem desenhar (a tool
-     * checa RenderHolder.isRenderAllowed). Sem isso o modelo desenhava gráfico por conta própria em
-     * pergunta analítica ("qual a taxa de falha por estado?") e ainda repetia os dados em markdown.
-     * Texto é o padrão; o prompt manda oferecer a visualização em vez de impor.
-     */
-    private static final Pattern VISUAL_REQUEST = Pattern.compile(
-            "gr[áa]fic|chart|tabela|tabular|pizza|rosca|donut|doughnut|barras|linhas|"
-                    + "visuali|plot|desenh|diagrama|listagem formatada",
-            Pattern.CASE_INSENSITIVE);
 
     /**
      * Aceite curto ("sim", "pode mandar", "quero"). Vale só quando a resposta anterior ofereceu a
@@ -61,7 +42,7 @@ public class ChatService {
     /**
      * O usuário pediu uma escrita?
      *
-     * <p>Mesma escolha do {@link #VISUAL_REQUEST}: quem enxerga a pergunta é o ChatService, e o que
+     * <p>Quem enxerga a pergunta é o ChatService, e o que
      * ele decide a partir dela é código, não instrução de prompt. Isto sustenta o aviso de "nada foi
      * gravado" sem depender de como o modelo escolheu redigir a resposta — perseguir a frase do
      * modelo é corrida perdida: ele já disse "cadastrado com sucesso", "a ação foi registrada" e
@@ -95,9 +76,6 @@ public class ChatService {
                     + "sem\\s+permiss\\w*|n[ãa]o\\s+\\w+\\s+(permiss[ãa]o|autoriza\\w*)",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.UNICODE_CHARACTER_CLASS);
 
-    /** Teto dos mapas por conversa: sessão é efêmera (novo id por load da página). */
-    private static final int MAX_PENDING_OFFERS = 500;
-
     /**
      * Linha de tabela markdown. Quando a resposta já tem render, o modelo ainda repetia os mesmos
      * dados em markdown — a tela mostrava a tabela duas vezes. O prompt proíbe a duplicação; isto
@@ -111,18 +89,34 @@ public class ChatService {
      * recupera a maior parte dos casos, e ainda sobram respostas em que o modelo repete a promessa
      * sem chamar tool nenhuma.
      */
+    /**
+     * A resposta menciona uma visualização. Serve tanto para a afirmação ("aqui está o gráfico")
+     * quanto para a oferta ("posso mostrar em gráfico") — a diferença entre as duas não é decidida
+     * aqui, e sim pelo {@code RenderHolder}: só vira retry quando nada foi desenhado.
+     */
+    private static final Pattern VISUAL_CLAIM = Pattern.compile(
+            "gr[áa]fico|chart|tabela|pizza|rosca|donut|doughnut", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * O modelo às vezes anuncia a visualização sem chamar a tool, mesmo com ela disponível e mesmo
+     * tendo entendido o pedido — reproduzido com "em pissa" logo depois de um gráfico: ele escreveu
+     * "aqui está o gráfico em pizza" e o log do turno não tem chamada nenhuma de render. Não é
+     * problema de política nem de argumento (render por referência eliminou os dois); é o modelo
+     * pulando a chamada. Só um retry resolve, e ele custa um round-trip apenas no caminho de falha.
+     *
+     * <p>Duas tentativas, a segunda mais dura: a branda recupera a maior parte, não todas.
+     */
     private static final List<String> RENDER_CORRECTIONS = List.of("""
-            Sua resposta anterior anunciou um gráfico ou tabela, mas você não chamou renderChart nem
-            renderTable — a tela do usuário ficou vazia. Refaça agora: busque os dados via tool (nunca
-            use dados de memória ou inventados), chame renderChart/renderTable com esses dados e
-            responda com um texto curto. Se não for o caso de renderizar nada, responda sem prometer
-            gráfico ou tabela.
+            Sua resposta anterior anunciou um gráfico ou uma tabela, mas você não chamou renderChart
+            nem renderTable — a tela do usuário ficou vazia. Refaça agora: se ainda não consultou os
+            dados nesta resposta, chame executeQuery, e então chame a tool de render informando as
+            colunas do resultado. Depois responda com um texto curto. Se não for caso de desenhar
+            nada, responda sem prometer gráfico nem tabela.
             """, """
-            Você continua sem chamar a tool de render, e a tela do usuário segue vazia. Listar os
-            dados em texto ou markdown não desenha nada. Nesta resposta, faça exatamente isto:
-            chame renderChart (gráfico) ou renderTable (tabela) com os dados obtidos por tool e
-            escreva no máximo uma frase depois disso, sem repetir os dados. Se não houver dados para
-            renderizar, diga isso claramente e não prometa gráfico nem tabela.
+            Você continua sem chamar a tool de render e a tela segue vazia. Listar os dados em texto
+            não desenha nada. Nesta resposta faça exatamente isto: chame renderChart (gráfico) ou
+            renderTable (tabela) com as colunas do resultado da consulta, e escreva no máximo uma
+            frase depois. Se não houver dados para desenhar, diga isso e não prometa visualização.
             """);
 
     /**
@@ -209,53 +203,49 @@ public class ChatService {
             """);
 
     /**
-     * Conversas (ver {@link AuthenticatedUser#conversationId}, não sessionId cru) em que a última
-     * resposta ofereceu uma visualização e o usuário ainda não respondeu.
+     * Oferta de visualização pendente e intenção de escrita pendente, por conversa (ver
+     * {@link AuthenticatedUser#conversationId}, não sessionId cru). Ver o javadoc de
+     * {@link IConversationStateStore} para o porquê de cada operação.
      */
-    private final Map<String, Boolean> pendingVisualOffer = new ConcurrentHashMap<>();
-
-    /**
-     * Conversas em que o pedido de escrita ainda está de pé. Existe pelo mesmo motivo do
-     * {@link #pendingVisualOffer}: o "sim, pode cadastrar" (e o "sim" pelado) não repete o verbo, e
-     * é justamente no turno do aceite que o modelo anuncia a gravação que não aconteceu.
-     */
-    private final Map<String, Boolean> pendingWriteIntent = new ConcurrentHashMap<>();
+    private final IConversationStateStore conversationStateStore;
 
     private final ChatClient chatClient;
     private final RenderHolder renderHolder;
+    private final RenderTool renderTool;
     private final ToolCallHolder toolCallHolder;
     private final PendingActionHolder pendingActionHolder;
     private final PendingActionMapper pendingActionMapper;
     private final ObjectProvider<Tracer> tracerProvider;
 
-    public ChatService(ChatClient chatClient, RenderHolder renderHolder, ToolCallHolder toolCallHolder,
+    public ChatService(ChatClient chatClient, RenderHolder renderHolder, RenderTool renderTool,
+                       ToolCallHolder toolCallHolder,
                        PendingActionHolder pendingActionHolder, PendingActionMapper pendingActionMapper,
-                       ObjectProvider<Tracer> tracerProvider) {
+                       ObjectProvider<Tracer> tracerProvider, IConversationStateStore conversationStateStore) {
         this.chatClient = chatClient;
         this.renderHolder = renderHolder;
+        this.renderTool = renderTool;
         this.toolCallHolder = toolCallHolder;
         this.pendingActionHolder = pendingActionHolder;
         this.pendingActionMapper = pendingActionMapper;
         this.tracerProvider = tracerProvider;
+        this.conversationStateStore = conversationStateStore;
     }
 
     public ChatMessageDTO respond(String userMessage, String sessionId) {
         // Isola a conversa por usuário autenticado: ver AuthenticatedUser.conversationId. Tudo que
-        // toca ChatMemory, a oferta de visualização pendente ou o PendingActionStore usa esta
+        // toca ChatMemory, a oferta de visualização pendente ou o IPendingActionStore usa esta
         // chave a partir daqui, nunca o sessionId cru — sessionId de outro usuário não pode
         // resolver a conversa nem a pendência dele.
         String conversationId = AuthenticatedUser.conversationId(sessionId);
         Span span = currentSpan();
         tagRequest(span, userMessage, conversationId);
 
-        boolean renderAllowed = renderAllowed(userMessage, conversationId);
-        renderHolder.setRenderAllowed(renderAllowed);
         boolean writeRequested = writeRequested(userMessage, conversationId);
         // A tool de escrita só vê os argumentos que o modelo escreveu; o dono da pendência vem daqui.
         pendingActionHolder.setSessionId(conversationId);
 
         try {
-            return respondOrThrow(userMessage, conversationId, span, renderAllowed, writeRequested);
+            return respondOrThrow(userMessage, conversationId, span, writeRequested);
         } catch (ToolExecutionException e) {
             if (!isPermissionDenied(e)) {
                 throw e;
@@ -273,15 +263,15 @@ public class ChatService {
     }
 
     private ChatMessageDTO respondOrThrow(String userMessage, String conversationId, Span span,
-                                          boolean renderAllowed, boolean writeRequested) {
+                                          boolean writeRequested) {
         String content = ask(userMessage, conversationId);
 
         for (String correction : RENDER_CORRECTIONS) {
-            if (!renderAllowed || renderHolder.get() != null
-                    || !VISUAL_CLAIM.matcher(nullToEmpty(content)).find()) {
+            if (renderHolder.get() != null || !VISUAL_CLAIM.matcher(nullToEmpty(content)).find()) {
                 break;
             }
-            log.info("Resposta anuncia visualização sem render; refazendo com correção. conversationId={}", conversationId);
+            log.info("Resposta anuncia visualização sem chamar render; refazendo com correção. "
+                    + "conversationId={}", conversationId);
             content = ask(correction, conversationId);
         }
 
@@ -306,11 +296,9 @@ public class ChatService {
 
         tag(span, "langfuse.trace.output", content);
 
-        RenderableContent renderData = renderHolder.get();
-        rememberVisualOffer(conversationId, content, renderData);
+        IRenderableContent renderData = renderHolder.get();
         PendingAction pending = pendingActionHolder.get();
-        String text = withPendingActionNotice(
-                withRenderFailureNotice(withoutDuplicatedTable(content, renderData), renderData), pending);
+        String text = withPendingActionNotice(withoutDuplicatedTable(content, renderData), pending);
 
         // Três desmentidos possíveis para a resposta que sobrou depois das correções, e eles são
         // exclusivos: dois avisos de "isso não aconteceu" na mesma resposta são ruído, e ruído faz
@@ -345,23 +333,6 @@ public class ChatService {
                 && DATA_CLAIM.matcher(nullToEmpty(content)).find();
     }
 
-    /**
-     * Render liberado quando o usuário pede a visualização, ou quando aceita a oferta feita na
-     * resposta anterior ("sim"). A oferta é consumida no mesmo ato: um "sim" só vale uma vez.
-     */
-    private boolean renderAllowed(String userMessage, String conversationId) {
-        String message = nullToEmpty(userMessage);
-        if (VISUAL_REQUEST.matcher(message).find()) {
-            pendingVisualOffer.remove(conversationId);
-            return true;
-        }
-        boolean accepted = pendingVisualOffer.remove(conversationId) != null
-                && AFFIRMATIVE.matcher(message.strip()).find();
-        if (accepted) {
-            log.info("Render liberado: usuário aceitou a oferta de visualização. conversationId={}", conversationId);
-        }
-        return accepted;
-    }
 
     /**
      * O turno é um pedido de escrita — direto ("cadastre o veículo X") ou como aceite de um pedido
@@ -375,16 +346,13 @@ public class ChatService {
     private boolean writeRequested(String userMessage, String conversationId) {
         String message = nullToEmpty(userMessage).strip();
         if (WRITE_REQUEST.matcher(message).find()) {
-            if (pendingWriteIntent.size() >= MAX_PENDING_OFFERS) {
-                pendingWriteIntent.clear();
-            }
-            pendingWriteIntent.put(conversationId, Boolean.TRUE);
+            conversationStateStore.setWriteIntent(conversationId, true);
             return true;
         }
-        if (pendingWriteIntent.containsKey(conversationId) && AFFIRMATIVE.matcher(message).find()) {
+        if (conversationStateStore.hasWriteIntent(conversationId) && AFFIRMATIVE.matcher(message).find()) {
             return true;
         }
-        pendingWriteIntent.remove(conversationId);
+        conversationStateStore.setWriteIntent(conversationId, false);
         return false;
     }
 
@@ -410,28 +378,18 @@ public class ChatService {
                 && !DENIAL.matcher(text).find();
     }
 
-    /** Guarda que esta resposta ofereceu gráfico/tabela sem desenhar, para o "sim" seguinte valer. */
-    private void rememberVisualOffer(String conversationId, String content, RenderableContent renderData) {
-        if (renderData == null && VISUAL_CLAIM.matcher(nullToEmpty(content)).find()) {
-            if (pendingVisualOffer.size() >= MAX_PENDING_OFFERS) {
-                pendingVisualOffer.clear();
-            }
-            pendingVisualOffer.put(conversationId, Boolean.TRUE);
-        } else {
-            pendingVisualOffer.remove(conversationId);
-        }
-    }
 
     private String ask(String userMessage, String conversationId) {
         return chatClient.prompt()
                 .user(userMessage)
                 .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversationId))
+                .tools(renderTool)
                 .call()
                 .content();
     }
 
     /** Com render na resposta, a mesma tabela em markdown no texto é só ruído: sai. */
-    private String withoutDuplicatedTable(String content, RenderableContent renderData) {
+    private String withoutDuplicatedTable(String content, IRenderableContent renderData) {
         if (renderData == null || content == null) {
             return content;
         }
@@ -446,21 +404,6 @@ public class ChatService {
         return value == null ? "" : value;
     }
 
-    /**
-     * Quando o modelo chamou renderChart/renderTable com argumentos inválidos e não refez a chamada,
-     * nada foi renderizado — mas o texto costuma dizer "aqui está o gráfico". O prompt proíbe isso,
-     * só que prompt não garante: o aviso aqui é o que impede a tela de mostrar uma afirmação falsa.
-     */
-    private String withRenderFailureNotice(String content, RenderableContent renderData) {
-        String error = renderHolder.getError();
-        if (renderData != null || error == null) {
-            return content;
-        }
-        String text = content == null ? "" : content.strip();
-        return (text.isEmpty() ? "" : text + "\n\n")
-                + "> ⚠️ Nada foi renderizado nesta resposta: a visualização foi recusada. "
-                + error + " Peça de novo para eu refazer o gráfico ou a tabela.";
-    }
 
     /**
      * Aviso de que a escrita ainda não aconteceu, quando há ação pendente.

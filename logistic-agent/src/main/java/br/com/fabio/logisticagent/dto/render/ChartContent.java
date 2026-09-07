@@ -7,5 +7,5 @@ public record ChartContent(
         String chartType,
         List<String> labels,
         List<Dataset> datasets
-) implements RenderableContent {
+) implements IRenderableContent {
 }

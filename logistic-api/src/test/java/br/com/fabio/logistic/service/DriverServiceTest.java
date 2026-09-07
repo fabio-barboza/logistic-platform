@@ -6,10 +6,10 @@ import br.com.fabio.logistic.dto.DeletionSummary;
 import br.com.fabio.logistic.exception.ConflictException;
 import br.com.fabio.logistic.exception.NotFoundException;
 import br.com.fabio.logistic.mapper.DriverMapper;
-import br.com.fabio.logistic.repository.DriverRepository;
-import br.com.fabio.logistic.repository.DriverVehicleRepository;
-import br.com.fabio.logistic.repository.RouteRepository;
-import br.com.fabio.logistic.repository.VehicleRepository;
+import br.com.fabio.logistic.repository.IDriverRepository;
+import br.com.fabio.logistic.repository.IDriverVehicleRepository;
+import br.com.fabio.logistic.repository.IRouteRepository;
+import br.com.fabio.logistic.repository.IVehicleRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -26,9 +26,9 @@ import static org.mockito.Mockito.when;
 
 class DriverServiceTest {
 
-    private final DriverRepository driverRepository = mock(DriverRepository.class);
-    private final DriverVehicleRepository driverVehicleRepository = mock(DriverVehicleRepository.class);
-    private final RouteRepository routeRepository = mock(RouteRepository.class);
+    private final IDriverRepository driverRepository = mock(IDriverRepository.class);
+    private final IDriverVehicleRepository driverVehicleRepository = mock(IDriverVehicleRepository.class);
+    private final IRouteRepository routeRepository = mock(IRouteRepository.class);
 
     private final UUID id = UUID.randomUUID();
     private final Driver driver = new Driver();
@@ -39,7 +39,7 @@ class DriverServiceTest {
     void setUp() {
         driver.setId(id);
         driver.setName("João Ribeiro");
-        driverService = new DriverService(driverRepository, mock(VehicleRepository.class),
+        driverService = new DriverService(driverRepository, mock(IVehicleRepository.class),
                 driverVehicleRepository, routeRepository, new DriverMapper());
         when(driverRepository.findById(id)).thenReturn(Optional.of(driver));
     }

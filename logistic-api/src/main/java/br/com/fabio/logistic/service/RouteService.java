@@ -11,9 +11,9 @@ import br.com.fabio.logistic.dto.RouteResponse;
 import br.com.fabio.logistic.exception.NotFoundException;
 import br.com.fabio.logistic.mapper.OrderMapper;
 import br.com.fabio.logistic.mapper.RouteMapper;
-import br.com.fabio.logistic.repository.DriverRepository;
-import br.com.fabio.logistic.repository.OrderRepository;
-import br.com.fabio.logistic.repository.RouteRepository;
+import br.com.fabio.logistic.repository.IDriverRepository;
+import br.com.fabio.logistic.repository.IOrderRepository;
+import br.com.fabio.logistic.repository.IRouteRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -28,15 +28,15 @@ import java.util.UUID;
 @Service
 public class RouteService {
 
-    private final RouteRepository routeRepository;
-    private final DriverRepository driverRepository;
-    private final OrderRepository orderRepository;
+    private final IRouteRepository routeRepository;
+    private final IDriverRepository driverRepository;
+    private final IOrderRepository orderRepository;
     private final RouteMapper routeMapper;
     private final OrderMapper orderMapper;
 
-    public RouteService(RouteRepository routeRepository,
-                         DriverRepository driverRepository,
-                         OrderRepository orderRepository,
+    public RouteService(IRouteRepository routeRepository,
+                         IDriverRepository driverRepository,
+                         IOrderRepository orderRepository,
                          RouteMapper routeMapper,
                          OrderMapper orderMapper) {
         this.routeRepository = routeRepository;

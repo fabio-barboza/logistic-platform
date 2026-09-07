@@ -5,8 +5,8 @@ import br.com.fabio.logistic.domain.Vehicle;
 import br.com.fabio.logistic.dto.DeletionSummary;
 import br.com.fabio.logistic.exception.NotFoundException;
 import br.com.fabio.logistic.mapper.VehicleMapper;
-import br.com.fabio.logistic.repository.DriverVehicleRepository;
-import br.com.fabio.logistic.repository.VehicleRepository;
+import br.com.fabio.logistic.repository.IDriverVehicleRepository;
+import br.com.fabio.logistic.repository.IVehicleRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -22,8 +22,8 @@ import static org.mockito.Mockito.when;
 
 class VehicleServiceTest {
 
-    private final VehicleRepository vehicleRepository = mock(VehicleRepository.class);
-    private final DriverVehicleRepository driverVehicleRepository = mock(DriverVehicleRepository.class);
+    private final IVehicleRepository vehicleRepository = mock(IVehicleRepository.class);
+    private final IDriverVehicleRepository driverVehicleRepository = mock(IDriverVehicleRepository.class);
 
     private final UUID id = UUID.randomUUID();
     private final Vehicle vehicle = new Vehicle();

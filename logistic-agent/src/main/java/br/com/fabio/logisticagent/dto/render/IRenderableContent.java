@@ -8,5 +8,5 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
         @JsonSubTypes.Type(value = ChartContent.class, name = "chart"),
         @JsonSubTypes.Type(value = TableContent.class, name = "table")
 })
-public sealed interface RenderableContent permits ChartContent, TableContent {
+public sealed interface IRenderableContent permits ChartContent, TableContent {
 }

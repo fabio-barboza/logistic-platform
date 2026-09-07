@@ -15,7 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DriverRepositoryTest {
 
     @org.springframework.beans.factory.annotation.Autowired
-    private DriverRepository driverRepository;
+    private IDriverRepository driverRepository;
 
     private Driver newDriver(String name, String email, String city, String state) {
         Driver driver = new Driver();

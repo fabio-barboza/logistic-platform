@@ -6,7 +6,9 @@ import br.com.fabio.logisticagent.confirm.PendingActionMapper;
 import br.com.fabio.logisticagent.dto.ChatMessageDTO;
 import br.com.fabio.logisticagent.dto.render.ChartContent;
 import br.com.fabio.logisticagent.dto.render.Dataset;
+import br.com.fabio.logisticagent.tool.QueryResultHolder;
 import br.com.fabio.logisticagent.tool.RenderHolder;
+import br.com.fabio.logisticagent.tool.RenderTool;
 import br.com.fabio.logisticagent.tool.ToolCallHolder;
 import io.micrometer.tracing.Tracer;
 import org.junit.jupiter.api.AfterEach;
@@ -34,6 +36,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 class ChatServiceTest {
 
@@ -48,20 +52,34 @@ class ChatServiceTest {
     private PendingActionHolder pendingActionHolder;
     private ChatClient chatClient;
     private ChatService chatService;
+    private QueryResultHolder queryResults;
+    private ChatClient.ChatClientRequestSpec requestSpec;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
         renderHolder = new RenderHolder();
+        queryResults = new QueryResultHolder();
         toolCallHolder = new ToolCallHolder();
         pendingActionHolder = new PendingActionHolder();
         // Caso normal: o modelo consultou o banco antes de responder. Os testes de render partem
         // daí, senão cada resposta com número cairia também no retry de dado sem tool.
         toolCallHolder.register("executeQuery");
         chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
+        // Deep stub devolve o mesmo objeto para a mesma chamada, então dá para segurar o spec e
+        // fazer tools() devolver ele próprio: a cadeia stubada vale com e sem a RenderTool, e
+        // "a tool foi oferecida ao modelo?" vira um verify.
+        // Um spec explícito, com tools() devolvendo ele mesmo: a cadeia stubada em whenLlmAnswers
+        // vale com e sem a RenderTool, e "a tool foi oferecida ao modelo?" vira um verify.
+        requestSpec = mock(ChatClient.ChatClientRequestSpec.class, RETURNS_DEEP_STUBS);
+        when(chatClient.prompt().user(any(String.class)).advisors(any(Consumer.class)))
+                .thenReturn(requestSpec);
+        when(requestSpec.tools(any())).thenReturn(requestSpec);
         ObjectProvider<Tracer> tracerProvider = mock(ObjectProvider.class);
-        chatService = new ChatService(chatClient, renderHolder, toolCallHolder, pendingActionHolder,
-                new PendingActionMapper(JsonMapper.builder().build()), tracerProvider);
+        chatService = new ChatService(chatClient, renderHolder, new RenderTool(renderHolder, queryResults),
+                toolCallHolder, pendingActionHolder,
+                new PendingActionMapper(JsonMapper.builder().build()), tracerProvider,
+                new InMemoryConversationStateStore());
     }
 
     @AfterEach
@@ -76,8 +94,7 @@ class ChatServiceTest {
 
     @SuppressWarnings("unchecked")
     private OngoingStubbing<String> whenLlmAnswers() {
-        return when(chatClient.prompt().user(any(String.class)).advisors(any(Consumer.class))
-                .call().content());
+        return when(requestSpec.call().content());
     }
 
     /** Answer que conta as chamadas à LLM — verify na cadeia de deep stubs registra invocações próprias. */
@@ -120,67 +137,7 @@ class ChatServiceTest {
     }
 
     @Test
-    void claimWithoutRenderTriggersCorrectiveRetry() {
-        // Primeira resposta anuncia o gráfico sem chamar a tool; na segunda o modelo renderiza.
-        whenLlmAnswers()
-                .thenAnswer(counting(invocation -> CLAIM))
-                .thenAnswer(counting(invocation -> {
-                    renderHolder.set(CHART);
-                    return "Aqui está o gráfico.";
-                }));
-
-        ChatMessageDTO response = chatService.respond("gere um gráfico de pizza", "sessao-1");
-
-        assertThat(response.renderData()).isEqualTo(CHART);
-        assertThat(response.content()).isEqualTo("Aqui está o gráfico.");
-        assertThat(llmCalls).hasValue(2);
-    }
-
-    @Test
-    void secondCorrectionRunsWhenFirstRetryStillDoesNotRender() {
-        whenLlmAnswers()
-                .thenAnswer(counting(invocation -> CLAIM))
-                .thenAnswer(counting(invocation -> CLAIM))
-                .thenAnswer(counting(invocation -> {
-                    renderHolder.set(CHART);
-                    return "Aqui está o gráfico.";
-                }));
-
-        ChatMessageDTO response = chatService.respond("gere um gráfico de pizza", "sessao-1");
-
-        assertThat(response.renderData()).isEqualTo(CHART);
-        assertThat(llmCalls).hasValue(3);
-    }
-
-    @Test
-    void claimWithoutRenderStopsAfterTwoCorrections() {
-        whenLlmAnswers().thenAnswer(counting(invocation -> CLAIM));
-
-        ChatMessageDTO response = chatService.respond("gere um gráfico de pizza", "sessao-1");
-
-        assertThat(response.renderData()).isNull();
-        assertThat(response.content()).isEqualTo(CLAIM);
-        assertThat(llmCalls).hasValue(3);
-    }
-
-    @Test
-    void rejectedRenderAppendsNoticeToContent() {
-        whenLlmAnswers().thenAnswer(counting(invocation -> {
-            renderHolder.registerRejection("O dataset 'Falhas' tem 4 valores, mas labels tem 25 rótulos.");
-            return CLAIM;
-        }));
-
-        ChatMessageDTO response = chatService.respond("um gráfico", "sessao-1");
-
-        assertThat(response.renderData()).isNull();
-        assertThat(response.content())
-                .startsWith(CLAIM)
-                .contains("Nada foi renderizado")
-                .contains("25 rótulos");
-    }
-
-    @Test
-    void successfulRenderKeepsContentUntouchedAndSkipsRetry() {
+    void successfulRenderKeepsContentUntouched() {
         whenLlmAnswers().thenAnswer(counting(invocation -> {
             renderHolder.set(CHART);
             return CLAIM;
@@ -204,27 +161,36 @@ class ChatServiceTest {
         assertThat(llmCalls).hasValue(1);
     }
 
+
+    /**
+     * Reproduzido com "em pissa" depois de um gráfico: o modelo entendeu o pedido, tinha a tool
+     * disponível e ainda assim não a chamou, anunciando a visualização. Só o retry pega isso.
+     */
     @Test
-    void renderIsBlockedWhenUserDidNotAskForVisualization() {
-        whenLlmAnswers().thenAnswer(counting(invocation -> "A taxa de falha em SP é 18,8%."));
+    void claimWithoutRenderTriggersCorrectiveRetry() {
+        whenLlmAnswers().thenAnswer(counting(invocation -> {
+            if (llmCalls.get() > 1) {
+                renderHolder.set(CHART);
+                return "Aqui está o gráfico em pizza.";
+            }
+            return "Aqui está o gráfico em pizza.";
+        }));
 
-        ChatMessageDTO response = chatService.respond("qual a taxa de falha de entrega por estado?", "sessao-1");
+        ChatMessageDTO response = chatService.respond("em pissa", "sessao-1");
 
-        assertThat(renderHolder.isRenderAllowed()).isFalse();
-        assertThat(response.renderData()).isNull();
-        assertThat(llmCalls).hasValue(1);
+        assertThat(response.renderData()).isEqualTo(CHART);
+        assertThat(llmCalls).hasValue(2);
     }
 
-    /** Sem render permitido, "posso mostrar em gráfico?" não pode disparar o retry corretivo. */
+    /** Duas correções e para: o loop não pode ficar refazendo para sempre. */
     @Test
-    void offerOfChartDoesNotTriggerRetryWhenRenderIsBlocked() {
-        whenLlmAnswers().thenAnswer(counting(invocation ->
-                "A taxa de falha em SP é 18,8%. Posso mostrar isso em gráfico, se quiser."));
+    void claimWithoutRenderStopsAfterTwoCorrections() {
+        whenLlmAnswers().thenAnswer(counting(invocation -> CLAIM));
 
-        ChatMessageDTO response = chatService.respond("qual a taxa de falha por estado?", "sessao-1");
+        ChatMessageDTO response = chatService.respond("um gráfico de falhas", "sessao-1");
 
         assertThat(response.renderData()).isNull();
-        assertThat(llmCalls).hasValue(1);
+        assertThat(llmCalls).hasValue(3);
     }
 
     @Test
@@ -249,74 +215,9 @@ class ChatServiceTest {
                 .endsWith("SC lidera as falhas.");
     }
 
-    /** "sim" logo depois de o agente oferecer o gráfico é pedido de visualização. */
-    @Test
-    void yesAfterVisualOfferAllowsRender() {
-        whenLlmAnswers().thenAnswer(counting(invocation ->
-                "A taxa de falha em SP é 18,8%. Posso mostrar isso em gráfico, se quiser."));
-        chatService.respond("qual a taxa de falha por estado?", "sessao-1");
 
-        whenLlmAnswers().thenAnswer(counting(invocation -> {
-            assertThat(renderHolder.isRenderAllowed()).isTrue();
-            renderHolder.set(CHART);
-            return "Aqui está o gráfico.";
-        }));
-        ChatMessageDTO response = chatService.respond("sim", "sessao-1");
 
-        assertThat(response.renderData()).isEqualTo(CHART);
-    }
 
-    /** Sem oferta pendente, "sim" não libera render — nem vira retry corretivo. */
-    @Test
-    void yesWithoutPendingOfferKeepsRenderBlocked() {
-        whenLlmAnswers().thenAnswer(counting(invocation -> "Há 42 pedidos entregues em SP."));
-        chatService.respond("quantos pedidos entregues em SP?", "sessao-1");
-
-        whenLlmAnswers().thenAnswer(counting(invocation -> {
-            assertThat(renderHolder.isRenderAllowed()).isFalse();
-            return "Certo.";
-        }));
-        chatService.respond("sim", "sessao-1");
-    }
-
-    /**
-     * A chave da oferta pendente é a conversa (sub + sessionId), não o sessionId
-     * cru. Sem isso, o "sim" de user-b resolveria a oferta feita a user-a só porque as duas abas
-     * mandam o mesmo sessionId (ex.: sessionStorage forçado, ou coincidência).
-     */
-    @Test
-    void pendingVisualOfferIsIsolatedByAuthenticatedUser() {
-        authenticateAs("user-a");
-        whenLlmAnswers().thenAnswer(counting(invocation ->
-                "A taxa de falha em SP é 18,8%. Posso mostrar isso em gráfico, se quiser."));
-        chatService.respond("qual a taxa de falha por estado?", "sessao-1");
-
-        authenticateAs("user-b");
-        whenLlmAnswers().thenAnswer(counting(invocation -> {
-            assertThat(renderHolder.isRenderAllowed()).isFalse();
-            return "Certo.";
-        }));
-        chatService.respond("sim", "sessao-1");
-    }
-
-    /** A oferta vale uma vez: aceita, some. */
-    @Test
-    void visualOfferIsConsumedByTheAcceptance() {
-        whenLlmAnswers().thenAnswer(counting(invocation -> "Posso mostrar isso em gráfico, se quiser."));
-        chatService.respond("qual a taxa de falha por estado?", "sessao-1");
-
-        whenLlmAnswers().thenAnswer(counting(invocation -> {
-            renderHolder.set(CHART);
-            return "Aqui está o gráfico.";
-        }));
-        chatService.respond("sim", "sessao-1");
-
-        whenLlmAnswers().thenAnswer(counting(invocation -> {
-            assertThat(renderHolder.isRenderAllowed()).isFalse();
-            return "Há 42 pedidos.";
-        }));
-        chatService.respond("sim", "sessao-1");
-    }
 
     /**
      * Dado sem tool: o follow-up "e em MG?" devolveu 106 onde havia 423, com o log de tool calls
@@ -500,7 +401,7 @@ class ChatServiceTest {
     void writeSuccessClaimWithPendingKeepsOnlyThePendingNotice() {
         whenLlmAnswers().thenAnswer(counting(invocation -> {
             pendingActionHolder.set(new PendingAction("acao-3", "sessao-1", "createVehicle",
-                    "{\"name\":\"Truck Y\"}", null, Instant.now(), Map.of()));
+                    "{\"name\":\"Truck Y\"}", Instant.now(), Map.of()));
             return "Veículo Truck Y cadastrado com sucesso.";
         }));
 
@@ -580,7 +481,7 @@ class ChatServiceTest {
     void pendingWriteIsReturnedWithNotice() {
         whenLlmAnswers().thenAnswer(counting(invocation -> {
             pendingActionHolder.set(new PendingAction("acao-1", "sessao-1", "createDriver",
-                    "{\"name\":\"João Silva\",\"state\":\"SP\"}", null, Instant.now(), Map.of()));
+                    "{\"name\":\"João Silva\",\"state\":\"SP\"}", Instant.now(), Map.of()));
             return "Vou cadastrar o motorista João Silva.";
         }));
 
@@ -605,7 +506,7 @@ class ChatServiceTest {
     void pendingWriteNoticeContradictsClaimOfCompletion() {
         whenLlmAnswers().thenAnswer(counting(invocation -> {
             pendingActionHolder.set(new PendingAction("acao-2", "sessao-1", "createVehicle",
-                    "{\"name\":\"Truck X\"}", null, Instant.now(), Map.of()));
+                    "{\"name\":\"Truck X\"}", Instant.now(), Map.of()));
             return "Veículo Truck X cadastrado com sucesso!";
         }));
 
@@ -636,7 +537,7 @@ class ChatServiceTest {
                         "A ação de cadastrar o motorista João Ribeiro será realizada. Aguardando sua confirmação."))
                 .thenAnswer(counting(invocation -> {
                     pendingActionHolder.set(new PendingAction("acao-1", "sessao-1", "createDriver",
-                            "{\"name\":\"João Ribeiro\"}", null, Instant.now(), Map.of()));
+                            "{\"name\":\"João Ribeiro\"}", Instant.now(), Map.of()));
                     return "Vou cadastrar o motorista João Ribeiro.";
                 }));
 
@@ -681,7 +582,7 @@ class ChatServiceTest {
     void actionClaimWithPendingIsLeftAlone() {
         whenLlmAnswers().thenAnswer(counting(invocation -> {
             pendingActionHolder.set(new PendingAction("acao-1", "sessao-1", "createDriver",
-                    "{\"name\":\"João\"}", null, Instant.now(), Map.of()));
+                    "{\"name\":\"João\"}", Instant.now(), Map.of()));
             return "Aguardando sua confirmação.";
         }));
 
