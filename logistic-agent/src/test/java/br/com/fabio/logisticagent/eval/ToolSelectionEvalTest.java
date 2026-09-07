@@ -8,7 +8,6 @@ import br.com.fabio.logisticagent.service.ChatService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -95,16 +94,6 @@ class ToolSelectionEvalTest {
     @Autowired
     private JwtDecoder jwtDecoder;
 
-    /**
-     * Autentica como eval-user antes de rodar (ver EvalAuthentication) e desfaz depois: a perna
-     * agent -> /mcp exige token para qualquer tool de escrita, e a lista de tools que o modelo vê
-     * já sai filtrada pela role de quem chama.
-     */
-    @BeforeEach
-    void authenticateAsEvalUser() {
-        EvalAuthentication.authenticateEvalUser(jwtDecoder);
-    }
-
     @AfterEach
     void clearSecurityContext() {
         SecurityContextHolder.clearContext();
@@ -138,6 +127,10 @@ class ToolSelectionEvalTest {
         // cada caso roda numa "requisição" nova: o RenderHolder é request-scoped e precisa
         // nascer limpo, senão o render de um caso vaza para o seguinte
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(new MockHttpServletRequest()));
+        // reautentica a cada caso: o token de eval-user tem lifespan de 10min (accessTokenLifespan
+        // do realm) e o dataset inteiro, com modelo lento, passa disso — sem isto, todo caso depois
+        // do minuto 10 perde o token no meio do TokenExchangeService e falha em cascata
+        EvalAuthentication.authenticateEvalUser(jwtDecoder);
         recorder.reset();
         String sessionId = UUID.randomUUID().toString();
 
