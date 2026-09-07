@@ -44,6 +44,27 @@ services:
       interval: 5s
       retries: 10
 
+  # Banco do logistic-agent, separado do banco de domínio de propósito: são serviços
+  # diferentes, e o agent não tem — nem pode ter — acesso às tabelas do logistic-api. É a
+  # mesma fronteira que as tools MCP defendem no nível da aplicação, aqui no nível do banco.
+  agentdb:
+    image: postgres:18
+    container_name: logistic-agentdb
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    volumes:
+      - agent_postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=agent
+      - POSTGRES_PASSWORD=agent
+      - POSTGRES_DB=agentdb
+      - PGDATA=/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U agent -d agentdb" ]
+      interval: 5s
+      retries: 10
+
   # Autenticação/autorização das três aplicações (realm "logistic", provisionado no
   # primeiro boot via --import-realm — ver infra/keycloak/import). Sem profile, como o
   # Postgres: faz parte da stack padrão.
@@ -237,6 +258,7 @@ services:
       retries: 10
 
 volumes:
+  agent_postgres_data:
   langfuse_postgres_data:
   langfuse_clickhouse_data:
   langfuse_clickhouse_logs:

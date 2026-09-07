@@ -22,7 +22,7 @@ class PendingActionMapperTest {
     }
 
     private PendingAction action(String toolName, String argsJson, Map<String, String> details) {
-        return new PendingAction("acao-1", "sessao-1", toolName, argsJson, null, Instant.now(), details);
+        return new PendingAction("acao-1", "sessao-1", toolName, argsJson, Instant.now(), details);
     }
 
     /**

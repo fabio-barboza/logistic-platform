@@ -6,5 +6,5 @@ public record TableContent(
         String title,
         List<String> columns,
         List<List<String>> rows
-) implements RenderableContent {
+) implements IRenderableContent {
 }

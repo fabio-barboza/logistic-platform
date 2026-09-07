@@ -21,12 +21,14 @@ $LogDir       = Join-Path $RootDir 'logs'
 $ComposeFile  = Join-Path $RootDir 'docker-compose.yaml'
 $SeedFile     = Join-Path $RootDir 'logistic-api\src\main\resources\db\seed\dados.sql'
 $DbContainer  = 'logisticdb'
+$AgentDbContainer = 'logistic-agentdb'
 $KeycloakContainer = 'logistic-keycloak'
 
 $ApiPort         = 8081
 $AgentPort       = 8080
 $WebuiPort       = 5173
 $DbPort          = 5432
+$AgentDbPort     = 5433
 $KeycloakPort    = 8090
 $KeycloakMgmtPort = 9000   # porta de management do Keycloak, onde vive o /health
 $LlmUrl          = 'http://localhost:8200'
@@ -37,6 +39,11 @@ $script:AgentProcess   = $null
 $script:WebuiProcess   = $null
 $script:StackStarted   = $false
 $script:ShutdownDone   = $false
+
+# Setado por Confirm-Reset (uma pergunta só para os dois resets: domínio e estado do agent).
+# Invoke-ResetAgentStateIfConfirmed, chamado depois de Start-Agent, lê esta flag em vez de
+# perguntar de novo.
+$script:ResetConfirmed = $false
 
 # --------------------------------------------------------------------------------------
 # Saída
@@ -79,7 +86,8 @@ Uso: .\start.ps1 [opções]
   -Build        recompila api e agent, e roda npm install no webui
   -NoBuild      nunca compila: falha se faltar jar ou node_modules (o padrão compila
                 nesse caso, por ser a primeira execução)
-  -Reset        limpa o banco e reinsere o dados.sql, mesmo populado (pede confirmação)
+  -Reset        limpa o banco e reinsere o dados.sql, mesmo populado (pede confirmação);
+                também limpa o estado do agent (conversas, pendências, ofertas de gráfico)
   -NoSeed       nunca semeia, nem com banco vazio
   -Yes          pula a confirmação do -Reset
   -Help         imprime esta tabela
@@ -155,6 +163,11 @@ function Test-Node {
     Write-Info "Node $(& node -v)"
 }
 
+function Test-AgentDbContainerRunning {
+    $state = docker inspect -f '{{.State.Running}}' $AgentDbContainer 2>$null
+    return ($state -eq 'true')
+}
+
 function Test-DbContainerRunning {
     $state = docker inspect -f '{{.State.Running}}' $DbContainer 2>$null
     return ($LASTEXITCODE -eq 0) -and (($state | Out-String).Trim() -eq 'true')
@@ -180,6 +193,16 @@ function Test-Ports {
         else {
             Write-Host "  porta $DbPort (Postgres) ocupada por outro processo"
             $busy += $DbPort
+        }
+    }
+
+    if (Test-PortBusy -Port $AgentDbPort) {
+        if (Test-AgentDbContainerRunning) {
+            Write-Info "container $AgentDbContainer já está de pé — será reaproveitado"
+        }
+        else {
+            Write-Host "  porta $AgentDbPort (Postgres do agent) ocupada por outro processo"
+            $busy += $AgentDbPort
         }
     }
 
@@ -377,6 +400,23 @@ function Wait-ForPort {
     return $false
 }
 
+function Wait-ForAgentPostgres {
+    $waited = 0
+    Write-Host '  aguardando Postgres do agent' -NoNewline
+    while ($waited -lt 60) {
+        docker exec $AgentDbContainer pg_isready -U agent -d agentdb *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host " ok ($waited`s)"
+            return $true
+        }
+        Start-Sleep -Seconds 2
+        $waited += 2
+        Write-Host '.' -NoNewline
+    }
+    Write-Host ' falhou'
+    return $false
+}
+
 function Wait-ForPostgres {
     $waited = 0
     Write-Host '  aguardando Postgres' -NoNewline
@@ -407,6 +447,11 @@ function Start-Postgres {
     }
     if (-not (Wait-ForPostgres)) {
         Fail "Postgres não ficou pronto em 60s. Veja: docker logs $DbContainer"
+    }
+
+    # Banco do agent: instância separada da de domínio, o agent não tem acesso ao logisticdb.
+    if (-not (Wait-ForAgentPostgres)) {
+        Fail "Postgres do agent não ficou pronto em 60s. Veja: docker logs $AgentDbContainer"
     }
 
     # Timeout maior que o dos outros: o Keycloak importa o realm no primeiro boot
@@ -540,7 +585,7 @@ function Confirm-Reset {
     if ($Yes) {
         return $true
     }
-    $answer = Read-Host '  -Reset vai apagar TODOS os dados das tabelas e repopular. Continuar? (s/N)'
+    $answer = Read-Host '  -Reset vai apagar TODOS os dados das tabelas (domínio e conversas do agent) e repopular o domínio. Continuar? (s/N)'
     return $answer -in @('s', 'S', 'sim', 'SIM')
 }
 
@@ -554,6 +599,7 @@ function Initialize-SeedIfEmpty {
 
     if ($Reset) {
         if (Confirm-Reset) {
+            $script:ResetConfirmed = $true
             Write-Info 'Reset pedido — repopulando com dados de demonstração...'
             Invoke-Seed
         }
@@ -574,6 +620,37 @@ function Initialize-SeedIfEmpty {
     }
     else {
         Write-Info "Banco já populado ($drivers motoristas) — seed ignorado."
+    }
+}
+
+# Invoke-Seed (acima) repopula só o banco de domínio. Sem isto, -Reset deixava conversas,
+# pendências de confirmação e ofertas de gráfico referenciando motoristas e veículos que o reset
+# apagou. Roda depois de Start-Agent porque é o Flyway do agent, no boot dele, que cria as tabelas.
+function Reset-AgentState {
+    Write-Step 'Limpando estado do agent'
+
+    $total = 0
+    foreach ($table in @('pending_action', 'conversation_state', 'spring_ai_chat_memory')) {
+        $output = docker exec $AgentDbContainer psql -U agent -d agentdb -tAc "SELECT count(*) FROM $table" 2>$null
+        $trimmed = ($output | Out-String).Trim()
+        $parsed = 0
+        if ([int]::TryParse($trimmed, [ref]$parsed)) {
+            $total += $parsed
+        }
+    }
+
+    docker exec $AgentDbContainer psql -U agent -d agentdb -q `
+        -c 'TRUNCATE pending_action, conversation_state, spring_ai_chat_memory'
+    if ($LASTEXITCODE -ne 0) {
+        Fail 'falha ao limpar o estado do agent.'
+    }
+
+    Write-Info "Estado do agent limpo ($total linhas: conversas, pendências de confirmação e ofertas de gráfico)."
+}
+
+function Invoke-ResetAgentStateIfConfirmed {
+    if ($Reset -and $script:ResetConfirmed) {
+        Reset-AgentState
     }
 }
 
@@ -665,6 +742,7 @@ try {
     Start-Api
     Initialize-SeedIfEmpty
     Start-Agent
+    Invoke-ResetAgentStateIfConfirmed
     Start-Webui
     Show-Urls
 

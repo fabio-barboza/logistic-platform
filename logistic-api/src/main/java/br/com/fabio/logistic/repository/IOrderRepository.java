@@ -12,7 +12,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
-public interface OrderRepository extends JpaRepository<Order, UUID> {
+public interface IOrderRepository extends JpaRepository<Order, UUID> {
 
     List<Order> findByRouteId(UUID routeId);
 

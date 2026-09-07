@@ -10,10 +10,10 @@ import br.com.fabio.logistic.dto.DriverResponse;
 import br.com.fabio.logistic.exception.ConflictException;
 import br.com.fabio.logistic.exception.NotFoundException;
 import br.com.fabio.logistic.mapper.DriverMapper;
-import br.com.fabio.logistic.repository.DriverRepository;
-import br.com.fabio.logistic.repository.DriverVehicleRepository;
-import br.com.fabio.logistic.repository.RouteRepository;
-import br.com.fabio.logistic.repository.VehicleRepository;
+import br.com.fabio.logistic.repository.IDriverRepository;
+import br.com.fabio.logistic.repository.IDriverVehicleRepository;
+import br.com.fabio.logistic.repository.IRouteRepository;
+import br.com.fabio.logistic.repository.IVehicleRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -25,16 +25,16 @@ import java.util.UUID;
 @Service
 public class DriverService {
 
-    private final DriverRepository driverRepository;
-    private final VehicleRepository vehicleRepository;
-    private final DriverVehicleRepository driverVehicleRepository;
-    private final RouteRepository routeRepository;
+    private final IDriverRepository driverRepository;
+    private final IVehicleRepository vehicleRepository;
+    private final IDriverVehicleRepository driverVehicleRepository;
+    private final IRouteRepository routeRepository;
     private final DriverMapper driverMapper;
 
-    public DriverService(DriverRepository driverRepository,
-                          VehicleRepository vehicleRepository,
-                          DriverVehicleRepository driverVehicleRepository,
-                          RouteRepository routeRepository,
+    public DriverService(IDriverRepository driverRepository,
+                          IVehicleRepository vehicleRepository,
+                          IDriverVehicleRepository driverVehicleRepository,
+                          IRouteRepository routeRepository,
                           DriverMapper driverMapper) {
         this.driverRepository = driverRepository;
         this.vehicleRepository = vehicleRepository;

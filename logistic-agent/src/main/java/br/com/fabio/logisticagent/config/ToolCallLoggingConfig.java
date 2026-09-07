@@ -1,5 +1,6 @@
 package br.com.fabio.logisticagent.config;
 
+import br.com.fabio.logisticagent.tool.QueryResultHolder;
 import br.com.fabio.logisticagent.tool.ToolCallHolder;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationHandler;
@@ -33,7 +34,8 @@ public class ToolCallLoggingConfig {
      */
     @Bean
     ObservationHandler<ToolCallingObservationContext> toolCallLoggingHandler(
-            ObjectProvider<ToolCallHolder> toolCallHolderProvider) {
+            ObjectProvider<ToolCallHolder> toolCallHolderProvider,
+            ObjectProvider<QueryResultHolder> queryResultHolderProvider) {
         return new ObservationHandler<>() {
 
             @Override
@@ -44,6 +46,7 @@ public class ToolCallLoggingConfig {
             @Override
             public void onStop(ToolCallingObservationContext context) {
                 register(context.getToolDefinition().name());
+                registerQueryResult(context.getToolDefinition().name(), context.getToolCallResult());
                 log.info("Tool chamada: {} args={} result={}",
                         context.getToolDefinition().name(),
                         context.getToolCallArguments(),
@@ -58,6 +61,22 @@ public class ToolCallLoggingConfig {
                         context.getToolCallArguments(),
                         context.getError());
             }
+            /**
+             * Guarda as linhas do executeQuery para o render montar a visualização a partir delas.
+             * Interceptar aqui, e não na tool, é o que mantém a logistic-api fora do assunto: o
+             * retorno já passa por este handler para ir ao log.
+             */
+            private void registerQueryResult(String toolName, String result) {
+                if (toolName == null || !toolName.endsWith("executeQuery")) {
+                    return;
+                }
+                try {
+                    queryResultHolderProvider.getObject().register(result);
+                } catch (RuntimeException e) {
+                    log.debug("Sem QueryResultHolder nesta execução: {}", e.getMessage());
+                }
+            }
+
             private void register(String toolName) {
                 try {
                     toolCallHolderProvider.getObject().register(toolName);

@@ -27,7 +27,7 @@ class ConfirmingToolCallbackProviderTest {
 
     private final List<String> executed = new ArrayList<>();
 
-    private PendingActionStore store;
+    private IPendingActionStore store;
     private PendingActionHolder holder;
     private RequiredArgumentsCheck requiredArguments;
     private DeletionTargetLookup deletionTarget;
@@ -36,7 +36,7 @@ class ConfirmingToolCallbackProviderTest {
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
-        store = new PendingActionStore();
+        store = new InMemoryPendingActionStore();
         JsonMapper jsonMapper = JsonMapper.builder().build();
         PendingActionMapper labels = new PendingActionMapper(jsonMapper);
         requiredArguments = new RequiredArgumentsCheck(jsonMapper, labels);

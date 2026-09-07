@@ -8,8 +8,8 @@ import br.com.fabio.logistic.dto.OrderRequest;
 import br.com.fabio.logistic.dto.OrderResponse;
 import br.com.fabio.logistic.exception.NotFoundException;
 import br.com.fabio.logistic.mapper.OrderMapper;
-import br.com.fabio.logistic.repository.OrderRepository;
-import br.com.fabio.logistic.repository.RouteRepository;
+import br.com.fabio.logistic.repository.IOrderRepository;
+import br.com.fabio.logistic.repository.IRouteRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -23,11 +23,11 @@ import java.util.UUID;
 @Service
 public class OrderService {
 
-    private final OrderRepository orderRepository;
-    private final RouteRepository routeRepository;
+    private final IOrderRepository orderRepository;
+    private final IRouteRepository routeRepository;
     private final OrderMapper orderMapper;
 
-    public OrderService(OrderRepository orderRepository, RouteRepository routeRepository, OrderMapper orderMapper) {
+    public OrderService(IOrderRepository orderRepository, IRouteRepository routeRepository, OrderMapper orderMapper) {
         this.orderRepository = orderRepository;
         this.routeRepository = routeRepository;
         this.orderMapper = orderMapper;

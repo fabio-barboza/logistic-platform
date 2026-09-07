@@ -11,12 +11,14 @@ COMPOSE_FILE="$ROOT_DIR/docker-compose.yaml"
 SEED_FILE="$ROOT_DIR/logistic-api/src/main/resources/db/seed/dados.sql"
 ENV_FILE="$ROOT_DIR/.env"
 DB_CONTAINER="logisticdb"
+AGENT_DB_CONTAINER="logistic-agentdb"
 KEYCLOAK_CONTAINER="logistic-keycloak"
 
 API_PORT=8081
 AGENT_PORT=8080
 WEBUI_PORT=5173
 DB_PORT=5432
+AGENT_DB_PORT=5433
 KEYCLOAK_PORT=8090
 KEYCLOAK_MGMT_PORT=9000   # porta de management do Keycloak, onde vive o /health
 LLM_URL="http://localhost:8200"
@@ -33,6 +35,10 @@ SKIP_BUILD=false
 RESET_DB=false
 NO_SEED=false
 ASSUME_YES=false
+
+# Setado por confirm_reset (uma pergunta só para os dois resets: domínio e estado do agent).
+# reset_agent_state, chamado depois de start_agent, lê esta flag em vez de perguntar de novo.
+RESET_CONFIRMED=false
 
 # --------------------------------------------------------------------------------------
 # Saída
@@ -74,7 +80,8 @@ Uso: ./start.sh [opções]
   --build       recompila api e agent, e roda npm install no webui
   --no-build    nunca compila: falha se faltar jar ou node_modules (o padrão compila
                 nesse caso, por ser a primeira execução)
-  --reset       limpa o banco e reinsere o dados.sql, mesmo populado (pede confirmação)
+  --reset       limpa o banco e reinsere o dados.sql, mesmo populado (pede confirmação);
+                também limpa o estado do agent (conversas, pendências, ofertas de gráfico)
   --no-seed     nunca semeia, nem com banco vazio
   --yes         pula a confirmação do --reset
   --help        imprime esta tabela
@@ -160,6 +167,10 @@ db_container_is_running() {
     [ "$(docker inspect -f '{{.State.Running}}' "$DB_CONTAINER" 2>/dev/null)" = "true" ]
 }
 
+agent_db_container_is_running() {
+    [ "$(docker inspect -f '{{.State.Running}}' "$AGENT_DB_CONTAINER" 2>/dev/null)" = "true" ]
+}
+
 keycloak_container_is_running() {
     [ "$(docker inspect -f '{{.State.Running}}' "$KEYCLOAK_CONTAINER" 2>/dev/null)" = "true" ]
 }
@@ -177,6 +188,15 @@ check_ports() {
             info "container $DB_CONTAINER já está de pé — será reaproveitado"
         else
             echo "  porta $DB_PORT (Postgres) ocupada por outro processo" >&2
+            busy=true
+        fi
+    fi
+
+    if port_is_busy "$AGENT_DB_PORT"; then
+        if agent_db_container_is_running; then
+            info "container $AGENT_DB_CONTAINER já está de pé — será reaproveitado"
+        else
+            echo "  porta $AGENT_DB_PORT (Postgres do agent) ocupada por outro processo" >&2
             busy=true
         fi
     fi
@@ -202,7 +222,7 @@ check_ports() {
     if [ "$busy" = true ]; then
         fail "libere as portas acima antes de subir. Um container de outra sessão pode estar segurando a 5432: 'docker rm -f $DB_CONTAINER'."
     fi
-    info "portas 8080, 8081, 5173 e 8090 livres"
+    info "portas 8080, 8081, 5173, 8090 e 5433 livres"
 }
 
 check_llm() {
@@ -337,6 +357,27 @@ wait_for_port() {
     return 1
 }
 
+# $1 container, $2 usuário, $3 database, $4 rótulo
+wait_for_postgres_container() {
+    local container="$1" user="$2" database="$3" label="$4"
+    local timeout=60
+    local waited=0
+
+    echo -n "  aguardando $label"
+    while [ "$waited" -lt "$timeout" ]; do
+        if docker exec "$container" pg_isready -U "$user" -d "$database" >/dev/null 2>&1; then
+            echo " ok (${waited}s)"
+            return 0
+        fi
+        sleep 2
+        waited=$((waited + 2))
+        echo -n "."
+    done
+
+    echo " falhou"
+    return 1
+}
+
 wait_for_postgres() {
     local timeout=60
     local waited=0
@@ -365,6 +406,10 @@ start_postgres() {
     STACK_STARTED=true
     docker compose -f "$COMPOSE_FILE" up -d || fail "falha ao subir o Postgres via docker compose."
     wait_for_postgres || fail "Postgres não ficou pronto em 60s. Veja: docker logs $DB_CONTAINER"
+
+    # Banco do agent: instância separada da de domínio, o agent não tem acesso ao logisticdb.
+    wait_for_postgres_container "$AGENT_DB_CONTAINER" agent agentdb "Postgres do agent" \
+        || fail "Postgres do agent não ficou pronto em 60s. Veja: docker logs $AGENT_DB_CONTAINER"
 
     # Timeout maior que o dos outros: o Keycloak importa o realm no primeiro boot
     # (--import-realm) e isso demora mais que uma subida normal.
@@ -460,7 +505,7 @@ confirm_reset() {
         return 0
     fi
     local answer
-    read -r -p "  --reset vai apagar TODOS os dados das tabelas e repopular. Continuar? (s/N) " answer
+    read -r -p "  --reset vai apagar TODOS os dados das tabelas (domínio e conversas do agent) e repopular o domínio. Continuar? (s/N) " answer
     case "$answer" in
         s|S|sim|SIM) return 0 ;;
         *) return 1 ;;
@@ -478,6 +523,7 @@ seed_if_empty() {
 
     if [ "$RESET_DB" = true ]; then
         if confirm_reset; then
+            RESET_CONFIRMED=true
             info "Reset pedido — repopulando com dados de demonstração..."
             run_seed
         else
@@ -496,6 +542,32 @@ seed_if_empty() {
         run_seed
     else
         info "Banco já populado ($drivers motoristas) — seed ignorado."
+    fi
+}
+
+# run_seed (acima) repopula só o banco de domínio. Sem isto, --reset deixava conversas, pendências
+# de confirmação e ofertas de gráfico referenciando motoristas e veículos que o reset apagou. Roda
+# depois de start_agent porque é o Flyway do agent, no boot dele, que cria as tabelas.
+reset_agent_state() {
+    step "Limpando estado do agent"
+
+    local table count total=0
+    for table in pending_action conversation_state spring_ai_chat_memory; do
+        count="$(docker exec "$AGENT_DB_CONTAINER" psql -U agent -d agentdb -tAc "SELECT count(*) FROM $table" 2>/dev/null | tr -d '[:space:]')"
+        [[ "$count" =~ ^[0-9]+$ ]] || count=0
+        total=$((total + count))
+    done
+
+    docker exec "$AGENT_DB_CONTAINER" psql -U agent -d agentdb -q \
+        -c "TRUNCATE pending_action, conversation_state, spring_ai_chat_memory" \
+        || fail "falha ao limpar o estado do agent."
+
+    info "Estado do agent limpo ($total linhas: conversas, pendências de confirmação e ofertas de gráfico)."
+}
+
+reset_agent_state_if_confirmed() {
+    if [ "$RESET_DB" = true ] && [ "$RESET_CONFIRMED" = true ]; then
+        reset_agent_state
     fi
 }
 
@@ -601,6 +673,7 @@ main() {
     start_api
     seed_if_empty
     start_agent
+    reset_agent_state_if_confirmed
     start_webui
     print_urls
 

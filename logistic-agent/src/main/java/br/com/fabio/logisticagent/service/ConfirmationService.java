@@ -1,7 +1,7 @@
 package br.com.fabio.logisticagent.service;
 
 import br.com.fabio.logisticagent.confirm.PendingAction;
-import br.com.fabio.logisticagent.confirm.PendingActionStore;
+import br.com.fabio.logisticagent.confirm.IPendingActionStore;
 import br.com.fabio.logisticagent.dto.ChatMessageDTO;
 import br.com.fabio.logisticagent.dto.ConfirmRequestDTO;
 import br.com.fabio.logisticagent.security.AuthenticatedUser;
@@ -9,18 +9,21 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.util.Arrays;
+
 /**
  * Executa (ou descarta) a ação de escrita que o usuário confirmou na tela.
  *
- * <p>A execução chama o {@link org.springframework.ai.tool.ToolCallback} original com o JSON
- * registrado — <b>sem passar pela LLM</b>. Fechar o ciclo pedindo ao modelo "agora pode executar"
- * traria de volta o problema que a confirmação resolve: o que roda tem que ser byte a byte o que
- * o usuário viu na tela.
+ * <p>Resolve o {@link org.springframework.ai.tool.ToolCallback} pelo <b>nome</b> da tool e chama
+ * com o JSON registrado, <b>sem passar pela LLM</b>: o que roda tem que ser byte a byte o que o
+ * usuário viu na tela.
  *
  * <p>O desfecho entra na ChatMemory da sessão porque o modelo não participa deste passo e, sem
  * isso, o turno seguinte ("qual o id dele?") responderia sobre uma ação que, para ele, ficou
@@ -31,14 +34,22 @@ public class ConfirmationService {
 
     private static final Logger log = LoggerFactory.getLogger(ConfirmationService.class);
 
-    private final PendingActionStore store;
+    private final IPendingActionStore store;
     private final ChatMemory chatMemory;
     private final JsonMapper jsonMapper;
 
-    public ConfirmationService(PendingActionStore store, ChatMemory chatMemory, JsonMapper jsonMapper) {
+    /**
+     * O provider CRU, <b>nunca</b> o {@code ConfirmingToolCallbackProvider}: pelo decorado, a
+     * confirmação registraria outra pendência em vez de gravar.
+     */
+    private final ToolCallbackProvider mcpToolCallbacks;
+
+    public ConfirmationService(IPendingActionStore store, ChatMemory chatMemory, JsonMapper jsonMapper,
+            ToolCallbackProvider mcpToolCallbacks) {
         this.store = store;
         this.chatMemory = chatMemory;
         this.jsonMapper = jsonMapper;
+        this.mcpToolCallbacks = mcpToolCallbacks;
     }
 
     public ChatMessageDTO resolve(ConfirmRequestDTO request) {
@@ -58,8 +69,19 @@ public class ConfirmationService {
                     + ". Nada foi gravado. Não a execute nem a mencione como concluída.");
             return message("Ação cancelada. Nada foi gravado.");
         }
+        // Null aqui não é "ação não encontrada" — o take() acima já consumiu a pendência. É a
+        // tool não estar no handshake MCP desta instância, sintoma de API fora do ar no startup.
+        ToolCallback callback = resolveCallback(action.toolName());
+        if (callback == null) {
+            log.warn("Tool {} não encontrada nas tools MCP ao confirmar a ação {}",
+                    action.toolName(), action.id());
+            remember(conversationId, "A confirmação da ação " + action.toolName()
+                    + " não pôde ser executada porque o backend está indisponível. Nada foi gravado.");
+            return message("Não foi possível executar a ação: o backend está indisponível no "
+                    + "momento. Aguarde e tente novamente em instantes.");
+        }
         try {
-            String result = action.callback().call(action.argsJson());
+            String result = callback.call(action.argsJson());
             log.info("Ação {} ({}) confirmada e executada", action.id(), action.toolName());
             remember(conversationId, "O usuário CONFIRMOU a ação " + action.toolName()
                     + " e ela foi executada agora. Retorno da tool: " + result);
@@ -96,6 +118,14 @@ public class ConfirmationService {
         } catch (JacksonException e) {
             return result;
         }
+    }
+
+    /** O nome vem do {@code getToolDefinition().name()} do próprio callback: igualdade direta. */
+    private ToolCallback resolveCallback(String toolName) {
+        return Arrays.stream(mcpToolCallbacks.getToolCallbacks())
+                .filter(callback -> callback.getToolDefinition().name().equals(toolName))
+                .findFirst()
+                .orElse(null);
     }
 
     private void remember(String conversationId, String text) {

@@ -3,14 +3,12 @@ package br.com.fabio.logisticagent.config;
 import br.com.fabio.logisticagent.confirm.ConfirmingToolCallbackProvider;
 import br.com.fabio.logisticagent.confirm.DeletionTargetLookup;
 import br.com.fabio.logisticagent.confirm.PendingActionHolder;
-import br.com.fabio.logisticagent.confirm.PendingActionStore;
+import br.com.fabio.logisticagent.confirm.IPendingActionStore;
 import br.com.fabio.logisticagent.confirm.RequiredArgumentsCheck;
-import br.com.fabio.logisticagent.tool.RenderTool;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
-import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.openai.http.okhttp.OpenAiHttpClientBuilderCustomizer;
 import org.springframework.ai.tool.ToolCallbackProvider;
@@ -93,8 +91,8 @@ public class ChatClientConfig {
             Status finalizadores (sem mais transição): rota COMPLETED e COMPLETED_WITH_FAILURES;
             pedido DELIVERED e DELIVER_FAILURE.
             Nos argumentos das tools o status vai sempre em inglês (é o valor do enum). A tradução
-            vale para o texto que o usuário lê; nas células de renderTable e nos rótulos de
-            renderChart o próprio código traduz, então pode mandar o valor do enum ali.
+            vale para o texto que o usuário lê; nas células e nos rótulos da visualização o próprio
+            código traduz.
 
             Uma query sem LIMIT devolve no máximo 50 linhas. Se a listagem parecer parcial, mostre o
             que veio, diga que é uma amostra e ofereça filtrar melhor (por cidade, período ou status)
@@ -107,28 +105,31 @@ public class ChatClientConfig {
             "Gráfico de pedidos por status", sem mais nada, é bar.
 
             Use renderTable quando o usuário pedir tabela ou listagem formatada.
-            Em renderTable, cada linha de "rows" traz um valor por coluna, na ordem de "columns",
-            extraindo de cada registro apenas os campos que viram coluna.
 
-            Texto é o padrão: se o usuário não pediu gráfico nem tabela, responda só com texto e,
-            quando uma visualização ajudaria, ofereça ("posso mostrar isso em gráfico, se quiser")
-            em vez de desenhar por conta própria. Nessas respostas as tools de render estão
-            bloqueadas e recusam a chamada — não insista, e não escreva tabela em markdown no lugar.
+            As tools de render NÃO recebem os dados: elas desenham o resultado do último
+            executeQuery desta resposta. Você informa apenas quais colunas usar, com o nome exato
+            que aparece no resultado da consulta. Então a ordem é sempre: primeiro executeQuery,
+            depois a tool de render. Se a tool responder que a coluna não existe, ela devolve as
+            colunas disponíveis — corrija o nome e chame de novo.
+
+            TEXTO É O PADRÃO. Só desenhe quando o usuário pedir — com a palavra "gráfico",
+            "tabela", "pizza", "barras", "visualização" ou equivalente, inclusive escrita errado, e
+            também quando ele pedir para mudar ("em pizza", "em barras", "refaz maior") logo depois
+            de uma visualização que você acabou de desenhar. Pergunta analítica não pedida em
+            gráfico ("qual a taxa de falha por estado?", "quantos motoristas existem?") se responde
+            em texto: se uma visualização ajudaria, ofereça em uma frase ("posso mostrar isso em
+            gráfico, se quiser") e desenhe só no turno seguinte, se ele aceitar.
+
+            Nunca anuncie um gráfico ou uma tabela sem ter chamado renderChart/renderTable na mesma
+            resposta — prometer sem chamar deixa a tela vazia.
 
             Cada resposta desenha no máximo uma visualização — ou um gráfico, ou uma tabela, nunca
-            os dois. O usuário pediu gráfico? Só renderChart. Pediu tabela? Só renderTable. A
-            segunda chamada de render na mesma resposta é recusada e não aparece na tela.
-            Só o que você renderizar nesta resposta aparece na tela: se o usuário pedir para trocar
-            o tipo, refazer ou ajustar uma visualização anterior, chame renderChart/renderTable de
-            novo — a visualização da resposta anterior não continua valendo, e sem uma nova chamada
-            a tela fica sem nada.
-
-            Se a tool de render responder com uma mensagem de erro em vez de "preparado", ela não
-            renderizou nada: corrija os argumentos, chame de novo, e nunca diga ao usuário que o
-            gráfico ou a tabela ficou pronto.
+            os dois. Só o que você renderizar nesta resposta aparece na tela: se o usuário pedir
+            para trocar o tipo, refazer ou ajustar uma visualização anterior, chame de novo — a
+            visualização da resposta anterior não continua valendo.
 
             Quando chamar renderChart ou renderTable, não repita os dados no texto da resposta — o
-            frontend já desenha o gráfico ou a tabela. Duplicar em markdown polui a tela e gasta tokens.
+            frontend já desenha. Duplicar em markdown polui a tela e gasta tokens.
 
             Fluxo: busque os dados com executeQuery, chame a tool de render se apropriado, e responda com
             um texto curto confirmando o que foi feito (ex.: "Aqui está o gráfico de entregas por estado.").
@@ -136,11 +137,17 @@ public class ChatClientConfig {
             Nunca invente dados. Se a tool voltar vazia, diga que não há registros.
             """;
 
-    @Bean
-    ChatMemoryRepository chatMemoryRepository() {
-        return new InMemoryChatMemoryRepository();
-    }
-
+    /**
+     * O {@code ChatMemoryRepository} vem da auto-configuração do starter
+     * {@code spring-ai-starter-model-chat-memory-repository-jdbc} (ver pom.xml), que registra um
+     * {@code JdbcChatMemoryRepository} usando o mesmo {@code DataSource} do agent — schema
+     * "agent". A tabela {@code spring_ai_chat_memory} NÃO é criada pelo inicializador do Spring
+     * AI, e sim pela nossa migration {@code V1__agent_state.sql}: o DDL dele declara
+     * {@code conversation_id VARCHAR(36)} (assume UUID) e a chave deste agent é
+     * {@code sub|sessionId}, ~70 caracteres — o motivo completo está no comentário da própria
+     * migration. Não declarar bean aqui de propósito: um {@code InMemoryChatMemoryRepository}
+     * devolveria a conversa para a heap.
+     */
     @Bean
     ChatMemory chatMemory(ChatMemoryRepository chatMemoryRepository) {
         return MessageWindowChatMemory.builder()
@@ -157,7 +164,7 @@ public class ChatClientConfig {
      */
     @Bean
     ChatClient chatClient(ChatClient.Builder builder, ToolCallbackProvider mcpToolCallbacks,
-            RenderTool renderTool, ChatMemory chatMemory, PendingActionStore pendingActionStore,
+            ChatMemory chatMemory, IPendingActionStore pendingActionStore,
             RequiredArgumentsCheck requiredArguments, DeletionTargetLookup deletionTarget,
             ObjectProvider<PendingActionHolder> pendingActionHolder) {
         return builder
@@ -165,7 +172,6 @@ public class ChatClientConfig {
                 .defaultToolCallbacks(new ConfirmingToolCallbackProvider(
                         mcpToolCallbacks, pendingActionStore, requiredArguments, deletionTarget,
                         pendingActionHolder))
-                .defaultTools(renderTool)
                 .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
                 .build();
     }

@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-public interface DriverVehicleRepository extends JpaRepository<DriverVehicle, UUID> {
+public interface IDriverVehicleRepository extends JpaRepository<DriverVehicle, UUID> {
 
     List<DriverVehicle> findByDriverId(UUID driverId);
 
