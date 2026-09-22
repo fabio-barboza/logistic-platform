@@ -10,11 +10,6 @@ import org.springframework.web.client.ResourceAccessException;
 
 import java.util.Map;
 
-/**
- * Verifica periodicamente se o logistic-api está acessível através do actuator health.
- * O MCP client conecta no startup, mas se a API cair depois o agent continua rodando
- * sem detectar — este indicador expõe o status real no /actuator/health.
- */
 @Component
 @ConfigurationProperties(prefix = "logistic.backend")
 public class BackendHealthIndicator implements HealthIndicator {

@@ -57,7 +57,6 @@ class DriverServiceTest {
         verify(driverRepository).delete(driver);
     }
 
-    /** A FK route→driver é RESTRICT: sem esta checagem o banco estoura com erro de constraint. */
     @Test
     void motoristaComRotasNaoPodeSerExcluido() {
         when(routeRepository.countByDriverId(id)).thenReturn(3L);

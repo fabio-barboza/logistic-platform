@@ -19,7 +19,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
-/** Fonte única de verdade para regras de negócio de pedido. Controller e tools MCP delegam aqui. */
 @Service
 public class OrderService {
 

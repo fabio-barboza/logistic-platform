@@ -15,16 +15,6 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 
-/**
- * Apaga estado que ninguém mais vai ler.
- *
- * <p>O {@code main.js} gera um {@code sessionId} novo a cada carregamento da página, então cada F5
- * abandona uma conversa que ninguém mais alcança. Não há histórico de conversas no produto, então
- * essa conversa é lixo por definição — sem isto as tabelas crescem para sempre.
- *
- * <p>Cada passada é um delete por corte de tempo, idempotente. Não introduza lock nem eleição de
- * líder aqui: não há corrida para evitar.
- */
 @Component
 public class AgentStatePurge {
 
@@ -36,7 +26,6 @@ public class AgentStatePurge {
     private final IConversationStateRepository conversationStates;
     private final EntityManager entityManager;
 
-    /** Configurável porque quanto tempo uma conversa lembra é decisão de produto, não limpeza. */
     @Value("${logistic.agent.state-purge.chat-memory-ttl:24h}")
     private Duration chatMemoryTtl;
 
@@ -63,12 +52,6 @@ public class AgentStatePurge {
         }
     }
 
-    /**
-     * Query nativa porque {@code spring_ai_chat_memory} é tabela do Spring AI, não entidade nossa.
-     * O corte é pela última mensagem da conversa: conversa parada há mais que o TTL some inteira,
-     * conversa ativa fica intacta, mensagem antiga incluída — é ela que dá contexto ao turno
-     * seguinte.
-     */
     private int purgeChatMemory(Instant now) {
         return entityManager.createNativeQuery("""
                         DELETE FROM spring_ai_chat_memory

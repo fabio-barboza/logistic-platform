@@ -34,11 +34,6 @@ class AuthenticatedUserTest {
         assertThat(AuthenticatedUser.sub()).isEqualTo("user-1");
     }
 
-    /**
-     * O ponto central do isolamento: o mesmo sessionId, vindo de dois usuários diferentes,
-     * tem que virar duas chaves de conversa diferentes — senão o sessionId de um resolveria a
-     * conversa (ou a pendência) do outro.
-     */
     @Test
     void sameSessionIdYieldsDifferentConversationIdsForDifferentUsers() {
         authenticateAs("user-1");
@@ -58,7 +53,6 @@ class AuthenticatedUserTest {
                 .isEqualTo(AuthenticatedUser.conversationId("sessao-1"));
     }
 
-    /** Fora de requisição autenticada, a chave é o sessionId cru — não há usuário para isolar. */
     @Test
     void conversationIdFallsBackToRawSessionIdWithoutAuthentication() {
         assertThat(AuthenticatedUser.conversationId("sessao-1")).isEqualTo("sessao-1");

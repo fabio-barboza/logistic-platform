@@ -36,7 +36,6 @@ class OrderControllerTest {
     @MockitoBean
     private OrderService orderService;
 
-    // Ver DriverControllerTest para o porquê de mockar o JwtDecoder real.
     @MockitoBean
     private JwtDecoder jwtDecoder;
 

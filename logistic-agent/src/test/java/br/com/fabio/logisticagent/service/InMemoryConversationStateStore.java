@@ -3,15 +3,9 @@ package br.com.fabio.logisticagent.service;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Dublê para os testes de {@link ChatService}, que exercitam regex e não persistência.
- * {@code ConversationStateStoreContractTest} garante que não diverge do JDBC.
- */
 public class InMemoryConversationStateStore implements IConversationStateStore {
 
     private final Map<String, Boolean> writeIntents = new ConcurrentHashMap<>();
-
-
 
     @Override
     public boolean hasWriteIntent(String conversationId) {

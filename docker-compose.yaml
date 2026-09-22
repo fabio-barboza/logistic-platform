@@ -1,30 +1,3 @@
-# Stack local do logistic-platform, centralizada num arquivo só.
-#
-# Postgres sobe por padrão, sem profile — é o banco da aplicação, usado pelo start.sh:
-#
-#   docker compose up -d
-#
-# O Langfuse (observabilidade opcional do logistic-agent) fica atrás do profile "langfuse".
-# Duas formas de ligar:
-#
-#   1. Na linha de comando, uma vez:
-#        docker compose --profile langfuse up -d
-#
-#   2. De forma persistente, via .env na raiz (ver .env.example): com LANGFUSE_ENABLED=true
-#      lá, tanto `docker compose up -d` quanto `./start.sh` já sobem o Langfuse junto — o
-#      Compose lê o .env da raiz sozinho e ativa o profile via COMPOSE_PROFILES.
-#
-#   # UI em http://localhost:8060 → crie o projeto e um par de chaves em Settings → API Keys
-#   # preencha o logistic-agent/.env (LANGFUSE_ENABLED=true + as chaves) e rode ./start.sh
-#
-#   docker compose --profile langfuse down     # derruba, mantém os dados
-#   docker compose --profile langfuse down -v  # apaga os traces também
-#
-# Já tem um Langfuse rodando? Ignore o profile e aponte o LANGFUSE_OTLP_ENDPOINT do .env
-# para ele.
-#
-# Senhas fixas de propósito: ambiente local, mesmo critério do resto da stack. Não exponha
-# em rede.
 services:
   postgres:
     image: postgres:18
@@ -44,9 +17,6 @@ services:
       interval: 5s
       retries: 10
 
-  # Banco do logistic-agent, separado do banco de domínio de propósito: são serviços
-  # diferentes, e o agent não tem — nem pode ter — acesso às tabelas do logistic-api. É a
-  # mesma fronteira que as tools MCP defendem no nível da aplicação, aqui no nível do banco.
   agentdb:
     image: postgres:18
     container_name: logistic-agentdb
@@ -65,32 +35,16 @@ services:
       interval: 5s
       retries: 10
 
-  # Autenticação/autorização das três aplicações (realm "logistic", provisionado no
-  # primeiro boot via --import-realm — ver infra/keycloak/import). Sem profile, como o
-  # Postgres: faz parte da stack padrão.
-  #
-  # start-dev: modo de desenvolvimento (sem HTTPS, sem hostname estrito). Correto para a
-  # stack local; num deploy real vira `start` com KC_HOSTNAME e TLS.
-  #
-  # Senha fixa do admin (admin/admin), mesmo critério do Postgres nesta stack: ambiente
-  # local, não exponha em rede.
   keycloak:
     image: quay.io/keycloak/keycloak:26.7
     container_name: logistic-keycloak
     restart: unless-stopped
-    # Sem --features aqui: verificado via /admin/serverinfo no 26.7 que
-    # TOKEN_EXCHANGE_STANDARD_V2 (RFC 8693, o que a fase 3 usa) já vem type=DEFAULT,
-    # enabled=true. O flag "token-exchange" sem sufixo é o v1 legado (PREVIEW,
-    # deprecated, desligado por padrão) — não é o caminho, não ligar.
     command: start-dev --import-realm
     ports:
       - "8090:8080"
-      - "9000:9000"   # porta de management, onde vive o /health
+      - "9000:9000"
     volumes:
       - ./infra/keycloak/import:/opt/keycloak/data/import:ro
-      # Tema de login da aplicação (loginTheme do realm). Ao contrário do import acima,
-      # este volume é relido a cada requisição: o start-dev desliga o cache de tema, então
-      # editar .ftl/.css e dar F5 basta — não precisa recriar o container.
       - ./infra/keycloak/themes/logistic:/opt/keycloak/themes/logistic:ro
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
@@ -98,17 +52,11 @@ services:
       KC_HEALTH_ENABLED: "true"
       KC_HTTP_ENABLED: "true"
     healthcheck:
-      # A imagem do Keycloak não tem curl nem wget. /dev/tcp do bash é o caminho que
-      # funciona sem instalar nada no container.
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '\"status\": \"UP\"'"]
       interval: 5s
       timeout: 5s
       retries: 30
       start_period: 20s
-
-  # ATENÇÃO: o volume de import acima é :ro e só é lido no primeiro boot. Mudou o realm
-  # JSON depois de o Keycloak já ter subido? `docker compose down -v` e suba de novo, ou
-  # importe pela UI — é a pegadinha número um de --import-realm.
 
   langfuse-web:
     image: langfuse/langfuse:3
@@ -129,8 +77,6 @@ services:
     environment: &langfuse-env
       DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
       SALT: mysalt
-      # Precisa ir entre aspas: sem elas o YAML lê como número e o Langfuse recusa a chave.
-      # Gere a sua com: openssl rand -hex 32
       ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
       NEXTAUTH_URL: http://localhost:8060
       NEXTAUTH_SECRET: mysecret
@@ -158,9 +104,6 @@ services:
       LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
       LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
       LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
-      # Provisiona org, projeto, usuário e o par de chaves já no primeiro boot — são as
-      # mesmas chaves que estão no .env.example, então não precisa clicar em nada na UI.
-      # Login: admin@logistic.local / logistic123
       LANGFUSE_INIT_ORG_ID: logistic-platform
       LANGFUSE_INIT_ORG_NAME: Logistic Platform
       LANGFUSE_INIT_PROJECT_ID: logistic-platform
@@ -171,8 +114,6 @@ services:
       LANGFUSE_INIT_USER_NAME: Admin
       LANGFUSE_INIT_USER_PASSWORD: logistic123
 
-  # Consome a fila do Redis e grava os traces no ClickHouse. Sem ele a UI abre, mas
-  # trace nenhum aparece.
   langfuse-worker:
     image: langfuse/langfuse-worker:3
     container_name: langfuse-worker
@@ -190,7 +131,6 @@ services:
     environment:
       <<: *langfuse-env
 
-  # Metadados do Langfuse (projetos, chaves, usuários) — separado do logisticdb de propósito.
   langfuse-postgres:
     image: postgres:16
     container_name: langfuse-postgres
@@ -207,7 +147,6 @@ services:
       interval: 5s
       retries: 10
 
-  # Onde os traces realmente moram (OLAP).
   langfuse-clickhouse:
     image: clickhouse/clickhouse-server
     container_name: langfuse-clickhouse
@@ -227,7 +166,6 @@ services:
       retries: 10
       start_period: 1s
 
-  # Fila entre web e worker.
   langfuse-redis:
     image: redis:7
     container_name: langfuse-redis
@@ -239,7 +177,6 @@ services:
       interval: 3s
       retries: 10
 
-  # Guarda os eventos brutos e as mídias (S3 compatível).
   langfuse-minio:
     image: minio/minio
     container_name: langfuse-minio

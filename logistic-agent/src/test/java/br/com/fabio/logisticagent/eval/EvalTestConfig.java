@@ -8,20 +8,9 @@ import org.springframework.context.annotation.Bean;
 
 import java.util.Set;
 
-/**
- * Registra, só no eval, as tools que o modelo chamou.
- *
- * <p>A captura é por {@link ObservationHandler}, e não por um decorator de
- * {@code ToolCallbackProvider}, porque as tools de escrita não executam mais: elas são embrulhadas
- * pela confirmação, que registra a pendência e devolve texto sem delegar. Um decorator por dentro
- * dessa camada nunca seria chamado, e o eval veria "nenhuma tool chamada" onde o modelo chamou
- * createVehicle corretamente. A observação envolve a chamada que o Spring AI faz, qualquer que
- * seja a decoração — é o mesmo caminho pelo qual o ToolCallLoggingConfig loga em produção.
- */
 @TestConfiguration
 public class EvalTestConfig {
 
-    /** Tools locais do agent. O dataset mede escolha de tool MCP; render é avaliado à parte. */
     private static final Set<String> LOCAL_TOOLS = Set.of("renderChart", "renderTable");
 
     @Bean

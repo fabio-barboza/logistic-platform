@@ -13,13 +13,6 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.util.Map;
 
-/**
- * Reconstrói à mão o bean que {@code McpServerStreamableHttpWebMvcAutoConfiguration} monta sozinho
- * (mesmos jsonMapper/mcpEndpoint/keepAliveInterval/disallowDelete, verificado no bytecode dela),
- * porque essa auto-config não aceita um {@link McpTransportContextExtractor} externo — só assim o
- * Authorization chega ao {@link McpTransportContext} dentro das tools MCP. A auto-config declara o
- * bean dela com {@code @ConditionalOnMissingBean}, então este aqui a substitui sem precisar excluí-la.
- */
 @Configuration
 public class McpTransportConfig {
 

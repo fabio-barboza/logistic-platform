@@ -16,7 +16,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
 
-/** Fonte única de verdade para regras de negócio de veículo. Controller e tools MCP delegam aqui. */
 @Service
 public class VehicleService {
 
@@ -59,11 +58,6 @@ public class VehicleService {
         return vehicleMapper.toResponse(vehicle);
     }
 
-    /**
-     * Exclui o veículo. Nada bloqueia: o vínculo motorista↔veículo cai por CASCADE, e é só o
-     * vínculo — motorista nenhum é apagado junto. O retorno diz quantos vínculos foram desfeitos,
-     * porque o usuário confirma a exclusão de um veículo, não a de três associações.
-     */
     @Transactional
     public DeletionSummary delete(UUID id) {
         Vehicle vehicle = getOrThrow(id);

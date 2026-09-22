@@ -11,18 +11,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
-/**
- * Única exceção à regra de acesso via JPA: a consulta é escrita pela LLM em tempo de
- * execução, então não há entidade nem query estática para mapear. Roda sobre o
- * DataSource read-only (role logistic_ro), que não tem permissão de escrita no banco.
- */
 @Service
 public class QueryService {
 
     private static final Pattern LIMIT_PATTERN = Pattern.compile("(?i)\\blimit\\b");
-    // Teto de linhas devolvidas quando a query não traz LIMIT. Baixo de propósito: o gargalo não é
-    // o SQL (responde em <1ms), é a LLM gerar uma linha de tabela por registro no renderTable, e o
-    // payload ocupar a janela de contexto. Com as tools tipadas de busca fora, este é o único teto.
+
     private static final int MAX_ROWS = 50;
 
     private final JdbcTemplate readOnlyJdbcTemplate;
@@ -32,12 +25,6 @@ public class QueryService {
         this.readOnlyJdbcTemplate = readOnlyJdbcTemplate;
     }
 
-    /**
-     * Executa uma consulta SELECT sobre a conexão read-only e devolve o resultado em JSON.
-     * A blindagem contra escrita vive no Postgres (role logistic_ro sem GRANT de escrita);
-     * as checagens aqui (';', SELECT, LIMIT) são apenas conveniência para o modelo corrigir
-     * a query mais rápido, não a defesa em si.
-     */
     public String executeQuery(String sql) {
         String trimmed = sql == null ? "" : sql.trim();
         if (trimmed.isEmpty()) {

@@ -37,7 +37,6 @@ class VehicleControllerTest {
     @MockitoBean
     private VehicleService vehicleService;
 
-    // Ver DriverControllerTest para o porquê de mockar o JwtDecoder real.
     @MockitoBean
     private JwtDecoder jwtDecoder;
 

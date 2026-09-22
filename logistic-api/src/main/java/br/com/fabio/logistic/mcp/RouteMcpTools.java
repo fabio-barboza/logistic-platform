@@ -12,7 +12,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.UUID;
 
-/** Tools MCP de rota — só escrita; leitura é via executeQuery. */
 @Component
 public class RouteMcpTools {
 

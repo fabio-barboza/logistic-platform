@@ -13,10 +13,6 @@ public interface IPendingActionRepository extends JpaRepository<PendingAction, S
     Optional<PendingAction> findByIdAndSessionIdAndCreatedAtAfter(
             String id, String sessionId, Instant limit);
 
-    /**
-     * Delete em massa (não carrega a entidade) para o consumo único ser decidido pelo banco: quem
-     * receber 0 linhas perdeu a corrida.
-     */
     @Modifying
     @Query("DELETE FROM PendingAction a WHERE a.id = :id AND a.sessionId = :sessionId")
     int deleteConsuming(@Param("id") String id, @Param("sessionId") String sessionId);

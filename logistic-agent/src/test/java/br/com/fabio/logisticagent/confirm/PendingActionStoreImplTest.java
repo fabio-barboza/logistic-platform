@@ -20,10 +20,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Roda o contrato contra a implementação de produção, mais os dois casos que só fazem sentido
- * numa tabela: TTL e consumo único sob concorrência.
- */
 @DataJpaTest
 @ActiveProfiles("test")
 @Import(PendingActionStoreImpl.class)
@@ -48,11 +44,6 @@ class PendingActionStoreImplTest extends PendingActionStoreContractTest {
         assertThat(store.take("id-expirado", "sessao-1")).isNull();
     }
 
-    /**
-     * Clique duplo ou retry do frontend: exatamente uma chamada pode receber a ação, e quem decide
-     * é o delete — quem afeta 0 linhas perdeu. Sem transação de teste em volta, senão as threads
-     * não enxergariam a pendência registrada.
-     */
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void concurrentTakeGivesTheActionToExactlyOneThread() throws Exception {

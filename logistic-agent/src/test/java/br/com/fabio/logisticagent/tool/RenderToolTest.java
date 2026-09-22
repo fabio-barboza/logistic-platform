@@ -9,14 +9,8 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * O contrato aqui é: o modelo escolhe colunas, o código pega os valores do resultado da consulta.
- * Não há teste de argumento inválido de dados porque o modelo não envia dados — é a razão de ser
- * do desenho.
- */
 class RenderToolTest {
 
-    /** Como o MCP devolve o retorno do executeQuery: JSON de linhas dentro de um bloco "text". */
     private static final String QUERY_RESULT =
             "[{\"text\":\"[{\\\"city\\\":\\\"Santos\\\",\\\"falhas\\\":7,\\\"status\\\":\\\"DELIVERED\\\"},"
                     + "{\\\"city\\\":\\\"Campinas\\\",\\\"falhas\\\":6,\\\"status\\\":\\\"DELIVER_FAILURE\\\"}]\"}]";
@@ -56,7 +50,6 @@ class RenderToolTest {
         assertThat(table.rows()).containsExactly(List.of("Santos", "7"), List.of("Campinas", "6"));
     }
 
-    /** Enum cru não chega à tela: a tradução é código, não instrução de prompt. */
     @Test
     void statusIsTranslatedInTheRenderedCells() {
         queryResults.register(QUERY_RESULT);
@@ -68,7 +61,6 @@ class RenderToolTest {
                 List.of("Santos", "Entregue"), List.of("Campinas", "Falha na entrega"));
     }
 
-    /** Único erro de argumento que sobrou — e ele se corrige com a lista de colunas reais. */
     @Test
     void unknownColumnIsRefusedWithTheAvailableOnes() {
         queryResults.register(QUERY_RESULT);
@@ -97,7 +89,6 @@ class RenderToolTest {
         assertThat(renderHolder.get()).isNull();
     }
 
-    /** Retorno que não é lista de linhas (erro de SQL, texto de recusa) não vira dado nenhum. */
     @Test
     void nonRowResultLeavesNothingToRender() {
         queryResults.register("[{\"text\":\"ERROR: column x does not exist\"}]");

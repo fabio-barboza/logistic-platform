@@ -75,10 +75,6 @@ class ConfirmingToolCallbackProviderTest {
         SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(jwt, authorities));
     }
 
-    /**
-     * Sem a role write, deleteDriver/createDriver nem aparecem para o modelo escolher — é o que
-     * evita o card de confirmação seguido de 403 no clique (ver javadoc da classe).
-     */
     @Test
     void writeToolsAreHiddenFromUserWithoutWriteRole() {
         authenticateWithRoles("chat", "read");
@@ -99,7 +95,6 @@ class ConfirmingToolCallbackProviderTest {
         assertThat(names).containsExactlyInAnyOrder("createDriver", "executeQuery", "updateOrderStatus");
     }
 
-    /** Sem role read nenhuma, nem a leitura aparece. */
     @Test
     void readToolIsHiddenFromUserWithoutReadRole() {
         authenticateWithRoles("chat");
@@ -110,7 +105,6 @@ class ConfirmingToolCallbackProviderTest {
         assertThat(names).isEmpty();
     }
 
-    /** Sem usuário autenticado (handshake MCP do startup), a lista não é filtrada. */
     @Test
     void nothingIsHiddenWithoutAuthentication() {
         List<String> names = java.util.Arrays.stream(provider.getToolCallbacks())
@@ -140,11 +134,6 @@ class ConfirmingToolCallbackProviderTest {
         assertThat(holder.get()).isNull();
     }
 
-    /**
-     * Repetir a mesma chamada devolve a mesma pendência, sem registrar outra. É o retorno de
-     * sucesso que encerra o loop de tool calls — recusar de novo faria o modelo determinístico
-     * reenviar para sempre, como já aconteceu com o render.
-     */
     @Test
     void repeatedIdenticalCallReturnsSamePendingAction() {
         callback("createDriver").call("{\"name\":\"João\"}");
@@ -172,7 +161,6 @@ class ConfirmingToolCallbackProviderTest {
         assertThat(store.size()).isEqualTo(1);
     }
 
-    /** Fora de requisição (eval, sem servlet) não há quem confirme: a tool executa como antes. */
     @Test
     @SuppressWarnings("unchecked")
     void writeExecutesWhenThereIsNoRequestScopedHolder() {
@@ -187,10 +175,6 @@ class ConfirmingToolCallbackProviderTest {
         assertThat(executed).containsExactly("createDriver");
     }
 
-    /**
-     * Campo obrigatório faltando não vira pendência: o card mostraria um dado que ninguém
-     * informou. A tool manda o modelo perguntar, com o mesmo rótulo que a tela usa depois.
-     */
     @Test
     void incompleteWriteAsksTheUserInsteadOfRegistering() {
         ToolCallback createVehicle = withSchema();
@@ -204,7 +188,6 @@ class ConfirmingToolCallbackProviderTest {
         assertThat(executed).isEmpty();
     }
 
-    /** "N/A" e companhia são o modelo dizendo que não sabe — e iriam para o banco como texto. */
     @Test
     void placeholderValueCountsAsMissing() {
         String result = withSchema().call("{\"name\":\"N/A\",\"capacityKg\":180}");
@@ -221,7 +204,6 @@ class ConfirmingToolCallbackProviderTest {
         assertThat(holder.get()).isNotNull();
     }
 
-    /** Insistir na chamada incompleta esbarra no teto e o modelo é mandado parar de chamar. */
     @Test
     void repeatedIncompleteCallStopsAskingAndTellsTheModelToStop() {
         ToolCallback createVehicle = withSchema();
@@ -272,10 +254,6 @@ class ConfirmingToolCallbackProviderTest {
         };
     }
 
-    /**
-     * Exclusão: o agent consulta o registro alvo antes de registrar a pendência, para o card
-     * mostrar o motorista em vez de um UUID.
-     */
     @Test
     void deletionLooksUpTheTargetAndKeepsItsFields() {
         ToolCallback deleteDriver = deleteTool("[{\"text\":\"[{\\\"email\\\":\\\"joao@x.com\\\","
@@ -284,12 +262,11 @@ class ConfirmingToolCallbackProviderTest {
         String result = deleteDriver.call("{\"id\":\"3fa85f64-5717-4562-b3fc-2c963f66afa6\"}");
 
         assertThat(result).contains("NADA foi gravado");
-        // ordem declarada no lookup: o JSON da consulta não preserva a ordem das colunas
+
         assertThat(holder.get().details())
                 .containsExactly(entry("Nome", "João Ribeiro"), entry("E-mail", "joao@x.com"));
     }
 
-    /** Id inventado: nada é registrado, e o modelo é mandado consultar antes. */
     @Test
     void deletionOfUnknownIdIsRefusedBeforeShowingACard() {
         ToolCallback deleteDriver = deleteTool("[{\"text\":\"[]\"}]");
@@ -299,7 +276,7 @@ class ConfirmingToolCallbackProviderTest {
         assertThat(result).contains("Nenhum motorista com esse id").contains("executeQuery");
         assertThat(holder.get()).isNull();
         assertThat(store.size()).isZero();
-        // só a consulta do alvo rodou; a exclusão não
+
         assertThat(executed).containsExactly("executeQuery");
     }
 
@@ -310,7 +287,6 @@ class ConfirmingToolCallbackProviderTest {
         assertThat(holder.get()).isNull();
     }
 
-    /** deleteDriver + um executeQuery que devolve o que o teste mandar. */
     private ToolCallback deleteTool(String queryResult) {
         ToolCallback query = new ToolCallback() {
 

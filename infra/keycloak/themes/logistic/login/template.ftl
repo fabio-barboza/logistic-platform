@@ -1,18 +1,5 @@
 <#import "footer.ftl" as loginFooter>
 <#import "theme-resources.ftl" as themeResourceTags>
-<#--
-  Layout de todas as telas de login do realm `logistic`.
-
-  Derivado do template do tema `base` (26.7): a lógica dos fluxos — mensagens,
-  `show-username`, "tentar outra forma", trocar organização, seção de info — é a mesma,
-  porque os demais .ftl herdados (login, erro, página expirada, troca de senha) contam
-  com ela. O que muda é o entorno: marca, cartão, rodapé e o botão de tema, para a tela
-  ficar igual ao webui.
-
-  Os scripts do base (authChecker, menu-button-links, once-link) são funcionais e foram
-  mantidos: tirá-los quebra o login em outra aba, o dropdown de idioma e o duplo clique
-  em link de ação.
--->
 <#macro registrationLayout bodyClass="" displayInfo=false displayMessage=true displayRequiredFields=false>
 <!DOCTYPE html>
 <html class="${properties.kcHtmlClass!}" lang="${lang}"<#if realm.internationalizationEnabled> dir="${(locale.rtl)?then('rtl','ltr')}"</#if>>
@@ -28,12 +15,8 @@
     </#if>
     <title>${title!}</title>
 
-    <#-- Mesmo favicon do webui (logistic-webui/index.html), inline: o caminhão âmbar. -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%23f5a524'/%3E%3Cg transform='translate(6,6) scale(1.5)'%3E%3Cpath fill='%23221602' d='M20 8h-3V4H3c-1.1 0-2 .9-2 2v11h2c0 1.66 1.34 3 3 3s3-1.34 3-3h6c0 1.66 1.34 3 3 3s3-1.34 3-3h2v-5l-3-4zM6 18.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm13.5-9 1.96 2.5H17V9.5h2.5zm-1.5 9c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z'/%3E%3C/g%3E%3C/svg%3E" />
 
-    <#-- Tema resolvido antes da primeira pintura, senão a tela pisca clara antes de
-         virar escura. Mesma chave do webui ('lp-theme'), mas armazenamento à parte:
-         localStorage é por origem, e o Keycloak (8090) não é o webui (5173). -->
     <script>
       try {
         var lpTheme = localStorage.getItem('lp-theme');
@@ -127,7 +110,6 @@
 
 <body class="${properties.kcBodyClass!} ${bodyClass}" data-page-id="login-${pageId}">
 
-<#-- Mesmo botão do webui: sol no tema claro, lua no escuro (a troca é por CSS). -->
 <button class="icon-btn theme-toggle" id="theme-toggle" type="button"
         aria-label="Alternar tema claro/escuro" title="Alternar tema claro/escuro">
     <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -153,9 +135,6 @@
             </svg>
         </span>
         <div class="brand-text">
-            <#-- O realm define `displayName` ("Logistic Platform") e não `displayNameHtml`;
-                 o template do base usa msg("loginTitleHtml", displayNameHtml), que aqui sairia
-                 vazio. Daí a cascata, com o nome da aplicação como último fallback. -->
             <span id="kc-header-wrapper" class="brand-name"><#if realm.displayNameHtml?has_content>${kcSanitize(realm.displayNameHtml)?no_esc}<#elseif realm.displayName?has_content>${realm.displayName}<#else>Logistic Platform</#if></span>
             <span class="brand-sub">IA para frota, rotas e entregas</span>
         </div>
@@ -226,8 +205,6 @@
       <div id="kc-content">
         <div id="kc-content-wrapper">
 
-          <#-- App-initiated actions should not see warning messages about the need to complete the action -->
-          <#-- during login.                                                                               -->
           <#if displayMessage && message?has_content && (message.type != 'warning' || !isAppInitiatedAction??)>
               <div class="${properties.kcAlertClass!} alert-${message.type}">
                   <span class="alert-icon" aria-hidden="true">
@@ -307,14 +284,13 @@
 </div>
 
 <script>
-  // Alterna e persiste a preferência. O snippet do <head> é quem aplica no carregamento.
   (function () {
     var button = document.getElementById('theme-toggle');
     if (!button) return;
     button.addEventListener('click', function () {
       var next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
       document.documentElement.dataset.theme = next;
-      try { localStorage.setItem('lp-theme', next); } catch (e) { /* modo anônimo: vale só nesta página */ }
+      try { localStorage.setItem('lp-theme', next); } catch (e) {}
     });
   })();
 </script>

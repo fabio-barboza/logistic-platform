@@ -1,10 +1,3 @@
--- ============================================================
--- Script de criação de tabelas
--- Banco de dados: PostgreSQL
--- ============================================================
-
--- ENUMs
-
 CREATE TYPE route_status AS ENUM (
     'COMPLETED',
     'COMPLETED_WITH_FAILURES',
@@ -19,10 +12,6 @@ CREATE TYPE order_status AS ENUM (
     'CANCELED',
     'DELIVER_FAILURE'
 );
-
--- ============================================================
--- VEHICLE
--- ============================================================
 
 CREATE TABLE vehicle (
     id          UUID         NOT NULL DEFAULT gen_random_uuid(),
@@ -40,10 +29,6 @@ COMMENT ON COLUMN vehicle.name       IS 'Nome ou modelo do veículo';
 COMMENT ON COLUMN vehicle.capacity_kg IS 'Capacidade de carga do veículo, em quilogramas';
 COMMENT ON COLUMN vehicle.created_at IS 'Data e hora de criação do registro';
 COMMENT ON COLUMN vehicle.updated_at IS 'Data e hora da última atualização do registro';
-
--- ============================================================
--- DRIVER
--- ============================================================
 
 CREATE TABLE driver (
     id         UUID         NOT NULL DEFAULT gen_random_uuid(),
@@ -69,10 +54,6 @@ COMMENT ON COLUMN driver.state      IS 'Sigla do estado (UF) de residência do m
 COMMENT ON COLUMN driver.created_at IS 'Data e hora de criação do registro';
 COMMENT ON COLUMN driver.updated_at IS 'Data e hora da última atualização do registro';
 
--- ============================================================
--- DRIVER_VEHICLE  (associação motorista ↔ veículo)
--- ============================================================
-
 CREATE TABLE driver_vehicle (
     id         UUID      NOT NULL DEFAULT gen_random_uuid(),
     driver_id  UUID      NOT NULL,
@@ -91,10 +72,6 @@ COMMENT ON COLUMN driver_vehicle.driver_id  IS 'Referência ao motorista';
 COMMENT ON COLUMN driver_vehicle.vehicle_id IS 'Referência ao veículo';
 COMMENT ON COLUMN driver_vehicle.created_at IS 'Data e hora em que o veículo foi vinculado ao motorista';
 
--- ============================================================
--- ROUTE
--- ============================================================
-
 CREATE TABLE route (
     id         UUID         NOT NULL DEFAULT gen_random_uuid(),
     driver_id  UUID         NOT NULL,
@@ -112,10 +89,6 @@ COMMENT ON COLUMN route.driver_id  IS 'Referência ao motorista responsável pel
 COMMENT ON COLUMN route.status     IS 'Status atual da rota: IN_PROGRESS, COMPLETED, COMPLETED_WITH_FAILURES ou CANCELED';
 COMMENT ON COLUMN route.created_at IS 'Data e hora de criação da rota';
 COMMENT ON COLUMN route.updated_at IS 'Data e hora da última atualização da rota';
-
--- ============================================================
--- ORDER  (pedido)
--- ============================================================
 
 CREATE TABLE "order" (
     id           UUID         NOT NULL DEFAULT gen_random_uuid(),
@@ -142,10 +115,6 @@ COMMENT ON COLUMN "order".state        IS 'Sigla do estado (UF) do endereço de 
 COMMENT ON COLUMN "order".status       IS 'Status atual do pedido: IN_ROUTE, COLLECTED, DELIVERED, DELIVER_FAILURE ou CANCELED';
 COMMENT ON COLUMN "order".created_at   IS 'Data e hora de criação do pedido';
 COMMENT ON COLUMN "order".updated_at   IS 'Data e hora da última atualização do pedido';
-
--- ============================================================
--- ÍNDICES
--- ============================================================
 
 CREATE INDEX idx_driver_vehicle_driver  ON driver_vehicle (driver_id);
 CREATE INDEX idx_driver_vehicle_vehicle ON driver_vehicle (vehicle_id);

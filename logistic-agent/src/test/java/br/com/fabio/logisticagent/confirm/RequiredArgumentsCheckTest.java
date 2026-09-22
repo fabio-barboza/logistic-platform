@@ -47,13 +47,11 @@ class RequiredArgumentsCheckTest {
                 .containsExactly("Nome", "E-mail");
     }
 
-    /** Campo opcional ausente não é cobrado: quem manda é o "required" do schema. */
     @Test
     void optionalFieldIsNotRequired() {
         assertThat(check.missingFrom(tool(SCHEMA), "{\"name\":\"João\",\"email\":\"j@x.com\"}")).isEmpty();
     }
 
-    /** Número zero é um valor: só string vazia e placeholder contam como ausência. */
     @Test
     void zeroIsAValue() {
         String schema = """
@@ -62,10 +60,6 @@ class RequiredArgumentsCheckTest {
         assertThat(check.missingFrom(tool(schema), "{\"capacityKg\":0}")).isEmpty();
     }
 
-    /**
-     * Sem o que julgar, a chamada passa — a alternativa (recusar) transformaria uma chamada correta
-     * num loop de crítica só porque o schema não declara obrigatórios.
-     */
     @Test
     void schemaWithoutRequiredNeverBlocks() {
         assertThat(check.missingFrom(tool("{\"type\":\"object\"}"), "{}")).isEmpty();

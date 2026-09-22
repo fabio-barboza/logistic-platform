@@ -8,10 +8,6 @@ import tools.jackson.databind.json.JsonMapper;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/**
- * {@code details} vira JSON em coluna de texto. {@link LinkedHashMap} na volta porque a ordem das
- * chaves é significativa (ver {@link PendingAction}); o {@code JsonMapper} não reordena.
- */
 @Converter
 class DetailsJsonConverter implements AttributeConverter<Map<String, String>, String> {
 

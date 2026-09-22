@@ -62,15 +62,10 @@ class ChatServiceTest {
         queryResults = new QueryResultHolder();
         toolCallHolder = new ToolCallHolder();
         pendingActionHolder = new PendingActionHolder();
-        // Caso normal: o modelo consultou o banco antes de responder. Os testes de render partem
-        // daí, senão cada resposta com número cairia também no retry de dado sem tool.
+
         toolCallHolder.register("executeQuery");
         chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
-        // Deep stub devolve o mesmo objeto para a mesma chamada, então dá para segurar o spec e
-        // fazer tools() devolver ele próprio: a cadeia stubada vale com e sem a RenderTool, e
-        // "a tool foi oferecida ao modelo?" vira um verify.
-        // Um spec explícito, com tools() devolvendo ele mesmo: a cadeia stubada em whenLlmAnswers
-        // vale com e sem a RenderTool, e "a tool foi oferecida ao modelo?" vira um verify.
+
         requestSpec = mock(ChatClient.ChatClientRequestSpec.class, RETURNS_DEEP_STUBS);
         when(chatClient.prompt().user(any(String.class)).advisors(any(Consumer.class)))
                 .thenReturn(requestSpec);
@@ -97,7 +92,6 @@ class ChatServiceTest {
         return when(requestSpec.call().content());
     }
 
-    /** Answer que conta as chamadas à LLM — verify na cadeia de deep stubs registra invocações próprias. */
     private Answer<String> counting(Answer<String> answer) {
         return invocation -> {
             llmCalls.incrementAndGet();
@@ -105,12 +99,6 @@ class ChatServiceTest {
         };
     }
 
-    /**
-     * A tool MCP recusada por falta de permissão chega ao agent como {@link ToolExecutionException}
-     * cuja causa carrega o marcador {@code insufficient_scope} (ver ChatClientConfig e
-     * McpAuthorizationException no logistic-api) — ChatService precisa reconhecer isso e responder
-     * com uma mensagem amigável, em vez de deixar a exceção estourar para o controller.
-     */
     @Test
     void permissionDeniedToolCallReturnsFriendlyMessage() {
         ToolExecutionException denied = new ToolExecutionException(
@@ -161,11 +149,6 @@ class ChatServiceTest {
         assertThat(llmCalls).hasValue(1);
     }
 
-
-    /**
-     * Reproduzido com "em pissa" depois de um gráfico: o modelo entendeu o pedido, tinha a tool
-     * disponível e ainda assim não a chamou, anunciando a visualização. Só o retry pega isso.
-     */
     @Test
     void claimWithoutRenderTriggersCorrectiveRetry() {
         whenLlmAnswers().thenAnswer(counting(invocation -> {
@@ -182,7 +165,6 @@ class ChatServiceTest {
         assertThat(llmCalls).hasValue(2);
     }
 
-    /** Duas correções e para: o loop não pode ficar refazendo para sempre. */
     @Test
     void claimWithoutRenderStopsAfterTwoCorrections() {
         whenLlmAnswers().thenAnswer(counting(invocation -> CLAIM));
@@ -215,14 +197,6 @@ class ChatServiceTest {
                 .endsWith("SC lidera as falhas.");
     }
 
-
-
-
-
-    /**
-     * Dado sem tool: o follow-up "e em MG?" devolveu 106 onde havia 423, com o log de tool calls
-     * vazio. A correção é refazer exigindo a consulta.
-     */
     @Test
     void dataWithoutToolCallTriggersCorrectiveRetry() {
         toolCallHolder.reset();
@@ -239,11 +213,6 @@ class ChatServiceTest {
         assertThat(llmCalls).hasValue(2);
     }
 
-    /**
-     * Duas correções e para: o loop de tool calls não pode ficar preso no modelo teimoso. E o que
-     * sobra na tela não pode ser só o número inventado — quem insistiu foi o modelo, quem paga a
-     * conta é quem lê.
-     */
     @Test
     void dataWithoutToolCallStopsAfterTwoCorrectionsAndIsContradicted() {
         toolCallHolder.reset();
@@ -257,13 +226,6 @@ class ChatServiceTest {
                 .contains("Nenhuma consulta e nenhuma gravação aconteceram");
     }
 
-    /**
-     * Falha real, com o usuário sem a role {@code write}: sem as tools de escrita na lista, o
-     * modelo tenta contornar por executeQuery (o INSERT morre na role read-only) e anuncia
-     * "cadastrado com sucesso". Nada foi gravado — a fronteira é a role na API —, mas a tela dizia
-     * o contrário. Repare que houve tool call no turno: o gatilho aqui não pode ser "nenhuma tool
-     * chamada", e sim o invariante de que escrita nunca conclui dentro de um turno do chat.
-     */
     @Test
     void writeSuccessClaimWithoutPendingIsContradicted() {
         toolCallHolder.reset();
@@ -278,7 +240,6 @@ class ChatServiceTest {
         assertThat(llmCalls).hasValue(3);
     }
 
-    /** Primeira pessoa é a mesma afirmação com outra roupa: "cadastrei o veículo". */
     @Test
     void firstPersonWriteClaimWithoutPendingIsContradicted() {
         whenLlmAnswers().thenAnswer(counting(invocation -> "Pronto, cadastrei o veículo Truck Y."));
@@ -288,10 +249,6 @@ class ChatServiceTest {
         assertThat(response.content()).contains("Nada foi gravado");
     }
 
-    /**
-     * {@code created_at} lido do banco não é anúncio de escrita: "foi cadastrado em 12/03/2024" é
-     * resposta de leitura legítima, e desmentir aí seria mentir para o usuário.
-     */
     @Test
     void readingCreationDateIsNotAWriteClaim() {
         whenLlmAnswers().thenAnswer(counting(invocation ->
@@ -303,12 +260,6 @@ class ChatServiceTest {
         assertThat(llmCalls).hasValue(1);
     }
 
-    /**
-     * O caso que motivou o gatilho por pedido do usuário: a mesma pergunta, feita três vezes por um
-     * usuário sem {@code write}, rendeu três frases diferentes ("cadastrado com sucesso", "a ação
-     * foi registrada", "será cadastrado assim que você confirmar na tela"). Perseguir a frase do
-     * modelo é corrida perdida — aqui o gatilho é o pedido do usuário mais a ausência de pendência.
-     */
     @Test
     void writeRequestThatRegisteredNothingIsAnnouncedAsNotWritten() {
         whenLlmAnswers().thenAnswer(counting(invocation ->
@@ -321,7 +272,6 @@ class ChatServiceTest {
         assertThat(response.content()).contains("Nada foi gravado nesta resposta");
     }
 
-    /** O aceite não repete o verbo: "sim" depois do pedido de escrita continua sendo escrita. */
     @Test
     void bareYesAfterAWriteRequestIsStillAWriteTurn() {
         whenLlmAnswers().thenAnswer(counting(invocation ->
@@ -334,7 +284,6 @@ class ChatServiceTest {
         assertThat(response.content()).contains("Nada foi gravado nesta resposta");
     }
 
-    /** Pergunta do modelo mantém o fluxo aberto: ninguém foi informado de que algo aconteceu. */
     @Test
     void questionBackToTheUserIsNotAnnouncedAsNotWritten() {
         whenLlmAnswers().thenAnswer(counting(invocation ->
@@ -345,10 +294,6 @@ class ChatServiceTest {
         assertThat(response.content()).doesNotContain("Nada foi gravado");
     }
 
-    /**
-     * Recusa correta não precisa de aviso: a frase já disse que não deu. As duas formas abaixo
-     * saíram do modelo em execuções reais da mesma pergunta ("apague o pedido mais antigo").
-     */
     @Test
     void refusalIsNotAnnouncedAsNotWritten() {
         whenLlmAnswers().thenAnswer(counting(invocation ->
@@ -370,10 +315,6 @@ class ChatServiceTest {
         assertThat(response.content()).doesNotContain("Nada foi gravado");
     }
 
-    /**
-     * A supressão da recusa não pode virar esconderijo: quando a mesma resposta recusa uma coisa e
-     * afirma outra como feita, a afirmação explícita tem precedência e é desmentida.
-     */
     @Test
     void denialMixedWithAWriteClaimIsStillContradicted() {
         whenLlmAnswers().thenAnswer(counting(invocation ->
@@ -384,7 +325,6 @@ class ChatServiceTest {
         assertThat(response.content()).contains("Nada foi gravado");
     }
 
-    /** O pedido de escrita não pode sobreviver ao assunto seguinte. */
     @Test
     void writeIntentDoesNotLeakIntoTheNextQuestion() {
         whenLlmAnswers().thenAnswer(counting(invocation -> "Confirma a capacidade?"));
@@ -396,7 +336,6 @@ class ChatServiceTest {
         assertThat(response.content()).isEqualTo("Há 42 motoristas.");
     }
 
-    /** Escrita registrada de verdade: a frase de conclusão é desmentida pelo aviso de pendência. */
     @Test
     void writeSuccessClaimWithPendingKeepsOnlyThePendingNotice() {
         whenLlmAnswers().thenAnswer(counting(invocation -> {
@@ -413,10 +352,6 @@ class ChatServiceTest {
         assertThat(llmCalls).hasValue(1);
     }
 
-    /**
-     * Perguntar de volta é a resposta certa quando falta dado, e a pergunta costuma repetir o
-     * número que o usuário deu ("...capacidade de 200 kg?"). Desmentir aí seria ruído.
-     */
     @Test
     void questionRepeatingUserNumbersIsNotContradicted() {
         toolCallHolder.reset();
@@ -428,10 +363,6 @@ class ChatServiceTest {
         assertThat(response.content()).doesNotContain("Nenhuma consulta e nenhuma gravação aconteceram");
     }
 
-    /**
-     * Quando as duas heurísticas casam na mesma resposta, vale só a mais específica: o usuário
-     * está esperando um botão. Dois avisos de "isso não aconteceu" viram ruído.
-     */
     @Test
     void unregisteredActionNoticeWinsOverTheUnverifiedDataOne() {
         toolCallHolder.reset();
@@ -445,7 +376,6 @@ class ChatServiceTest {
                 .doesNotContain("Nenhuma consulta e nenhuma gravação aconteceram");
     }
 
-    /** Recusa e conversa não têm número: não há dado a desmentir, não se refaz. */
     @Test
     void answerWithoutNumbersDoesNotTriggerDataRetry() {
         toolCallHolder.reset();
@@ -458,10 +388,6 @@ class ChatServiceTest {
         assertThat(llmCalls).hasValue(1);
     }
 
-    /**
-     * "Transforme isso num gráfico" reaproveita os dados do turno anterior por decisão do usuário:
-     * há render, não há tool de dados, e está certo assim.
-     */
     @Test
     void renderReusingPreviousDataDoesNotTriggerDataRetry() {
         toolCallHolder.reset();
@@ -476,7 +402,6 @@ class ChatServiceTest {
         assertThat(llmCalls).hasValue(1);
     }
 
-    /** Escrita registrada: a tela recebe a pendência e o texto avisa que nada foi gravado. */
     @Test
     void pendingWriteIsReturnedWithNotice() {
         whenLlmAnswers().thenAnswer(counting(invocation -> {
@@ -498,10 +423,6 @@ class ChatServiceTest {
                 .contains("Nada foi gravado ainda");
     }
 
-    /**
-     * O aviso é incondicional: mesmo quando o modelo afirma ter cadastrado, a tela não pode
-     * ficar só com essa frase — é a afirmação falsa que a confirmação existe para impedir.
-     */
     @Test
     void pendingWriteNoticeContradictsClaimOfCompletion() {
         whenLlmAnswers().thenAnswer(counting(invocation -> {
@@ -515,7 +436,6 @@ class ChatServiceTest {
         assertThat(response.content()).contains("Nada foi gravado ainda");
     }
 
-    /** Sem escrita, nenhum aviso e nenhuma pendência na resposta. */
     @Test
     void readOnlyAnswerHasNoPendingAction() {
         whenLlmAnswers().thenAnswer(counting(invocation -> "Há 42 motoristas."));
@@ -526,10 +446,6 @@ class ChatServiceTest {
         assertThat(response.content()).isEqualTo("Há 42 motoristas.");
     }
 
-    /**
-     * O modelo anuncia a confirmação sem chamar tool nenhuma — a tela ficaria com a frase e sem
-     * botão. Falha real: "Adicione um novo motorista João Ribeiro" + dados, log de tool calls vazio.
-     */
     @Test
     void actionClaimWithoutPendingTriggersCorrectiveRetry() {
         whenLlmAnswers()
@@ -547,7 +463,6 @@ class ChatServiceTest {
         assertThat(llmCalls).hasValue(2);
     }
 
-    /** Insistiu duas vezes sem registrar: a tela precisa desmentir a promessa. */
     @Test
     void actionClaimWithoutPendingIsContradictedAfterTwoRetries() {
         whenLlmAnswers().thenAnswer(counting(invocation ->
@@ -560,10 +475,6 @@ class ChatServiceTest {
         assertThat(llmCalls).hasValue(3);
     }
 
-    /**
-     * Pedir os dados que faltam é a resposta certa quando a tool recusou por campo obrigatório —
-     * não pode virar retry só porque a frase menciona registrar a ação.
-     */
     @Test
     void askingForMissingDataIsNotAnActionClaim() {
         whenLlmAnswers().thenAnswer(counting(invocation ->
@@ -577,7 +488,6 @@ class ChatServiceTest {
         assertThat(llmCalls).hasValue(1);
     }
 
-    /** Com pendência registrada, a frase de confirmação é verdadeira e nada é desmentido. */
     @Test
     void actionClaimWithPendingIsLeftAlone() {
         whenLlmAnswers().thenAnswer(counting(invocation -> {

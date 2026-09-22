@@ -6,11 +6,6 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * O schema é texto em constante porque descrição de {@code @McpTool} é anotação e anotação exige
- * constante de compilação — não dá para gerar do enum em runtime. O que sobra é este teste: um
- * status novo no domínio quebra aqui, em vez de virar uma tradução faltando na tela meses depois.
- */
 class SchemaTextTest {
 
     @Test
@@ -45,7 +40,6 @@ class SchemaTextTest {
         }
     }
 
-    /** O schema inteiro precisa chegar ao modelo pela descrição do executeQuery, não só pela tool. */
     @Test
     void fullSchemaCarriesTablesEnumsAndRules() {
         assertThat(SchemaText.FULL)
@@ -55,10 +49,6 @@ class SchemaTextTest {
                 .contains(SchemaText.QUERY_RULES);
     }
 
-    /**
-     * Todas as linhas do status, não a primeira: CANCELED existe nos dois enums, e pegar só a
-     * primeira ocorrência checaria route_status achando que estava checando order_status.
-     */
     private String lineOf(String statusName) {
         String lines = SchemaText.ENUMS.lines()
                 .filter(line -> line.contains(statusName + " "))

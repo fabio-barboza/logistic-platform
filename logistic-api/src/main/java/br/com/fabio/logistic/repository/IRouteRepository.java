@@ -14,7 +14,6 @@ import java.util.UUID;
 
 public interface IRouteRepository extends JpaRepository<Route, UUID> {
 
-    /** Rotas do motorista. A FK route→driver é ON DELETE RESTRICT: com rota, o motorista não sai. */
     long countByDriverId(UUID driverId);
 
     @Query("""

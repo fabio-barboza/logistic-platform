@@ -38,7 +38,6 @@ class VehicleServiceTest {
         when(vehicleRepository.findById(id)).thenReturn(Optional.of(vehicle));
     }
 
-    /** Veículo sai mesmo vinculado: o CASCADE desfaz o vínculo, não o motorista. */
     @Test
     void exclusaoDesfazVinculosEOsConta() {
         when(driverVehicleRepository.findByVehicleId(id)).thenReturn(List.of(new DriverVehicle()));

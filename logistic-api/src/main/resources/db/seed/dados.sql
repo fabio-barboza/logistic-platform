@@ -1,21 +1,8 @@
--- ============================================================
--- Seed Data — totais emergentes (sem números fixos)
--- Banco de dados: PostgreSQL
--- ============================================================
-
--- ============================================================
--- LIMPEZA (ordem respeita FKs)
--- ============================================================
-
 TRUNCATE TABLE "order"        RESTART IDENTITY CASCADE;
 TRUNCATE TABLE route          RESTART IDENTITY CASCADE;
 TRUNCATE TABLE driver_vehicle RESTART IDENTITY CASCADE;
 TRUNCATE TABLE driver         RESTART IDENTITY CASCADE;
 TRUNCATE TABLE vehicle        RESTART IDENTITY CASCADE;
-
--- ============================================================
--- VEÍCULOS (pequenos, capacidade máx 200 kg = Fiat Toro)
--- ============================================================
 
 INSERT INTO vehicle (id, name, capacity_kg, created_at, updated_at) VALUES
     ('a0000000-0000-0000-0000-000000000001', 'Motocicleta Honda CB 300',    8,   '2024-01-05 08:00:00', '2024-01-05 08:00:00'),
@@ -28,11 +15,6 @@ INSERT INTO vehicle (id, name, capacity_kg, created_at, updated_at) VALUES
     ('a0000000-0000-0000-0000-000000000008', 'Furgão Renault Master',       100, '2024-01-06 08:00:00', '2024-01-06 08:00:00'),
     ('a0000000-0000-0000-0000-000000000009', 'Furgão Ford Transit',         120, '2024-01-02 08:00:00', '2024-01-02 08:00:00'),
     ('a0000000-0000-0000-0000-00000000000a', 'Caminhonete Fiat Toro',       200, '2024-01-10 08:00:00', '2024-01-10 08:00:00');
-
--- ============================================================
--- MOTORISTAS — contagem aleatória por estado (peso demográfico ± variância)
--- Total esperado: ~70–125 motoristas
--- ============================================================
 
 INSERT INTO driver (id, name, email, birthday, city, state, created_at, updated_at)
 WITH fn(n, rn) AS (
@@ -112,21 +94,12 @@ FROM drv_series ds
 JOIN fn ON fn.rn = 1 + ((ds.seq - 1) % 30)
 JOIN ln ON ln.rn = 1 + ((ds.seq + 9) % 30);
 
--- ============================================================
--- DRIVER_VEHICLE — 1 veículo aleatório por motorista
--- ============================================================
-
 INSERT INTO driver_vehicle (driver_id, vehicle_id, created_at)
 SELECT
     d.id,
     ('a0000000-0000-0000-0000-000000000' || lpad(to_hex((floor(random() * 10))::int + 1), 3, '0'))::UUID,
     CURRENT_TIMESTAMP - (floor(random() * 365))::int * interval '1 day'
 FROM driver d;
-
--- ============================================================
--- ROTAS — contagem aleatória por estado (sem IN_PROGRESS)
--- IDs: 0001–FFFF (sem conflito com IDs IN_PROGRESS que começam em 9001)
--- ============================================================
 
 INSERT INTO route (id, driver_id, status, created_at, updated_at)
 WITH state_route_config(state_code, base_routes, var_routes) AS (
@@ -181,11 +154,6 @@ SELECT
     LEAST(created + (floor(random() * 1440))::int * interval '1 minute', CURRENT_TIMESTAMP)
 FROM route_with_time;
 
--- ============================================================
--- ROTAS IN_PROGRESS — exatamente 1 por motorista
--- IDs: 9001+ (sem conflito com batch acima)
--- ============================================================
-
 INSERT INTO route (id, driver_id, status, created_at, updated_at)
 SELECT
     ('c0000000-0000-0000-0000-00000000' ||
@@ -195,11 +163,6 @@ SELECT
     CURRENT_TIMESTAMP - (floor(random() * 72) + 1)::int * interval '1 hour',
     CURRENT_TIMESTAMP - floor(random() * 60)::int  * interval '1 minute'
 FROM driver d;
-
--- ============================================================
--- PEDIDOS — 2–20 por rota; cidade/estado herdados do motorista
--- Total emergente: sem número fixo
--- ============================================================
 
 INSERT INTO "order" (id, route_id, zip_code, neighborhood, city, state, status, created_at, updated_at)
 WITH all_routes AS (

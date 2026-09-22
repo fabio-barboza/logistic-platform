@@ -1,9 +1,6 @@
-# H2 em modo PostgreSQL com o Flyway aplicando a migration real, como no logistic-api.
 spring:
   test:
     database:
-      # Sem isto o @DataJpaTest troca o datasource por um H2 embutido e ignora o MODE=PostgreSQL
-      # abaixo — o teste passaria a rodar contra um dialeto que a produção não usa.
       replace: none
   datasource:
     url: jdbc:h2:mem:testdb;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE

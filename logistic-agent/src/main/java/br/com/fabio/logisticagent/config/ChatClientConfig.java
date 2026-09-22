@@ -10,31 +10,30 @@ import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.http.okhttp.OpenAiHttpClientBuilderCustomizer;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.execution.DefaultToolExecutionExceptionProcessor;
 import org.springframework.ai.tool.execution.ToolExecutionExceptionProcessor;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openai.core.Timeout;
 
 import java.time.Duration;
+import java.util.Map;
 
 @Configuration
 public class ChatClientConfig {
 
     private static final int CHAT_MEMORY_MAX_MESSAGES = 20;
 
-    /**
-     * Marcador de {@code McpAuthorizationException} (logistic-api, mcp/McpAuthorizationException.java)
-     * — módulos Maven distintos, não compartilham classe (mesmo padrão do comentário-gêmeo em
-     * SecurityConfig). Mudou lá, mude aqui.
-     */
     public static final String PERMISSION_DENIED_MARKER = "insufficient_scope";
 
-    /** Tempo máximo de espera pela resposta completa da LLM. Veja llmTimeoutCustomizer. */
     private static final Duration LLM_READ_TIMEOUT = Duration.ofSeconds(300);
 
     private static final String SYSTEM_PROMPT = """
@@ -137,17 +136,6 @@ public class ChatClientConfig {
             Nunca invente dados. Se a tool voltar vazia, diga que não há registros.
             """;
 
-    /**
-     * O {@code ChatMemoryRepository} vem da auto-configuração do starter
-     * {@code spring-ai-starter-model-chat-memory-repository-jdbc} (ver pom.xml), que registra um
-     * {@code JdbcChatMemoryRepository} usando o mesmo {@code DataSource} do agent — schema
-     * "agent". A tabela {@code spring_ai_chat_memory} NÃO é criada pelo inicializador do Spring
-     * AI, e sim pela nossa migration {@code V1__agent_state.sql}: o DDL dele declara
-     * {@code conversation_id VARCHAR(36)} (assume UUID) e a chave deste agent é
-     * {@code sub|sessionId}, ~70 caracteres — o motivo completo está no comentário da própria
-     * migration. Não declarar bean aqui de propósito: um {@code InMemoryChatMemoryRepository}
-     * devolveria a conversa para a heap.
-     */
     @Bean
     ChatMemory chatMemory(ChatMemoryRepository chatMemoryRepository) {
         return MessageWindowChatMemory.builder()
@@ -156,37 +144,35 @@ public class ChatClientConfig {
                 .build();
     }
 
-    /**
-     * As tools MCP com as de escrita já embrulhadas pela confirmação. É aqui, e não num
-     * {@code @Primary} sobre o bean do starter MCP, para o decorator do eval
-     * ({@code RecordingToolCallbackProvider}) continuar podendo substituir o provider real sem
-     * perder a confirmação — os dois se compõem, este por fora.
-     */
     @Bean
     ChatClient chatClient(ChatClient.Builder builder, ToolCallbackProvider mcpToolCallbacks,
             ChatMemory chatMemory, IPendingActionStore pendingActionStore,
             RequiredArgumentsCheck requiredArguments, DeletionTargetLookup deletionTarget,
-            ObjectProvider<PendingActionHolder> pendingActionHolder) {
+            ObjectProvider<PendingActionHolder> pendingActionHolder,
+            @Value("${LLM_EXTRA_BODY:}") String llmExtraBody) {
         return builder
                 .defaultSystem(SYSTEM_PROMPT)
-                .defaultToolCallbacks(new ConfirmingToolCallbackProvider(
+                .defaultTools(new ConfirmingToolCallbackProvider(
                         mcpToolCallbacks, pendingActionStore, requiredArguments, deletionTarget,
                         pendingActionHolder))
                 .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
+                .defaultOptions(OpenAiChatOptions.builder().extraBody(parseExtraBody(llmExtraBody)))
                 .build();
     }
 
-    /**
-     * Por padrão o Spring AI não deixa uma {@code ToolExecutionException} encerrar a chamada:
-     * {@code DefaultToolExecutionExceptionProcessor} (alwaysThrow=false) converte o erro em texto e
-     * devolve ao modelo, que pode reenviar a mesma chamada — a armadilha das 172 recusas de render
-     * idênticas do CLAUDE.md, agora para negação de permissão. A recusa da tool MCP chega aqui como
-     * {@code IllegalStateException} genérica (o cliente MCP não distingue tipos de erro, só texto —
-     * ver a nota em McpAuthorizationException do logistic-api); o único jeito de diferenciar "sem
-     * permissão" de um erro de negócio comum (motorista com rotas, por exemplo, que deve continuar
-     * virando texto explicativo) é o marcador na mensagem. Só esse caso propaga; todo o resto cai no
-     * comportamento padrão (texto de volta ao modelo).
-     */
+    static Map<String, Object> parseExtraBody(String json) {
+        if (json == null || json.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return new ObjectMapper().readValue(json, new TypeReference<Map<String, Object>>() {
+            });
+        }
+        catch (Exception e) {
+            throw new IllegalStateException("LLM_EXTRA_BODY não é um JSON válido: " + json, e);
+        }
+    }
+
     @Bean
     ToolExecutionExceptionProcessor toolExecutionExceptionProcessor() {
         ToolExecutionExceptionProcessor defaultProcessor = DefaultToolExecutionExceptionProcessor.builder().build();
@@ -200,12 +186,6 @@ public class ChatClientConfig {
         };
     }
 
-    /**
-     * A chamada não é streaming: a LLM local não devolve byte nenhum até terminar de gerar a resposta
-     * inteira, então o read timeout precisa cobrir o tempo total de geração. Com 120s, qualquer resposta
-     * mais longa (uma tabela grande, por exemplo) estourava o timeout, o okhttp fechava o socket e o
-     * chat respondia "erro ao processar" (SocketException: Socket closed).
-     */
     @Bean
     OpenAiHttpClientBuilderCustomizer llmTimeoutCustomizer() {
         Timeout timeout = Timeout.builder()

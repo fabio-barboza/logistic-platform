@@ -8,10 +8,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Dublê para os testes unitários que exercitam classificação de tool, campos obrigatórios e regex,
- * não persistência. {@code PendingActionStoreContractTest} garante que não diverge do JDBC.
- */
 public class InMemoryPendingActionStore implements IPendingActionStore {
 
     private static final Logger log = LoggerFactory.getLogger(InMemoryPendingActionStore.class);
@@ -45,7 +41,6 @@ public class InMemoryPendingActionStore implements IPendingActionStore {
         return pending.size();
     }
 
-    /** Descarta o que o usuário deixou para trás. Chamado em todo acesso ao mapa. */
     private void purgeExpired() {
         Instant limit = Instant.now().minus(TTL);
         pending.values().removeIf(action -> action.createdAt().isBefore(limit));

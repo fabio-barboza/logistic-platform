@@ -11,27 +11,13 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-/**
- * Registra no log toda tool que o modelo chamou, com argumentos e retorno.
- * <p>
- * Sem isso não há como distinguir "o modelo chamou createVehicle e a API falhou" de "o modelo
- * disse que cadastrou sem nunca ter chamado a tool" — as duas terminam na mesma frase para o
- * usuário. O Langfuse mostra isso, mas é opcional e vem desligado por padrão; este log não.
- */
 @Configuration
 public class ToolCallLoggingConfig {
 
     private static final Logger log = LoggerFactory.getLogger(ToolCallLoggingConfig.class);
 
-    /** Retorno de busca pode ter dezenas de registros; no log só interessa o começo. */
     private static final int MAX_RESULT_CHARS = 300;
 
-    /**
-     * Além de logar, registra a chamada no {@link ToolCallHolder} da requisição — é dali que o
-     * ChatService descobre que o modelo respondeu com dados sem ter consultado nada.
-     * O holder vem por {@link ObjectProvider} porque este handler é singleton e roda também fora de
-     * requisição (o eval sobe o contexto sem servlet); nesse caso não há holder e só o log acontece.
-     */
     @Bean
     ObservationHandler<ToolCallingObservationContext> toolCallLoggingHandler(
             ObjectProvider<ToolCallHolder> toolCallHolderProvider,
@@ -61,11 +47,7 @@ public class ToolCallLoggingConfig {
                         context.getToolCallArguments(),
                         context.getError());
             }
-            /**
-             * Guarda as linhas do executeQuery para o render montar a visualização a partir delas.
-             * Interceptar aqui, e não na tool, é o que mantém a logistic-api fora do assunto: o
-             * retorno já passa por este handler para ir ao log.
-             */
+
             private void registerQueryResult(String toolName, String result) {
                 if (toolName == null || !toolName.endsWith("executeQuery")) {
                     return;
@@ -81,8 +63,7 @@ public class ToolCallLoggingConfig {
                 try {
                     toolCallHolderProvider.getObject().register(toolName);
                 } catch (RuntimeException e) {
-                    // Fora de requisição não há holder — o proxy do escopo estoura ao ser tocado.
-                    // Registrar é acessório; o log, que é a garantia de diagnóstico, já aconteceu.
+
                     log.debug("Sem ToolCallHolder nesta execução: {}", e.getMessage());
                 }
             }

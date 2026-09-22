@@ -8,11 +8,6 @@ import org.springframework.ai.tool.execution.ToolExecutionExceptionProcessor;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * {@code DefaultToolExecutionExceptionProcessor} do Spring AI não deixa uma
- * {@link ToolExecutionException} encerrar a chamada por padrão (converte em texto de volta ao
- * modelo) — o processor customizado precisa abrir exceção só para a recusa de permissão.
- */
 class ChatClientConfigTest {
 
     private final ToolExecutionExceptionProcessor processor = new ChatClientConfig().toolExecutionExceptionProcessor();

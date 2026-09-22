@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-#
-# Sobe a stack inteira da Logistic Platform: Postgres, logistic-api, logistic-agent e logistic-webui.
-# Ctrl+C derruba tudo.
-#
 set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,29 +16,21 @@ WEBUI_PORT=5173
 DB_PORT=5432
 AGENT_DB_PORT=5433
 KEYCLOAK_PORT=8090
-KEYCLOAK_MGMT_PORT=9000   # porta de management do Keycloak, onde vive o /health
+KEYCLOAK_MGMT_PORT=9000
 LLM_URL="http://localhost:8200"
 
-# Preenchidos durante a subida; usados pelo shutdown.
 API_PID=""
 AGENT_PID=""
 WEBUI_PID=""
 STACK_STARTED=false
 
-# Flags
 FORCE_BUILD=false
 SKIP_BUILD=false
 RESET_DB=false
 NO_SEED=false
 ASSUME_YES=false
 
-# Setado por confirm_reset (uma pergunta só para os dois resets: domínio e estado do agent).
-# reset_agent_state, chamado depois de start_agent, lê esta flag em vez de perguntar de novo.
 RESET_CONFIRMED=false
-
-# --------------------------------------------------------------------------------------
-# Saída
-# --------------------------------------------------------------------------------------
 
 info() {
     echo "  $1"
@@ -53,8 +41,6 @@ step() {
     echo "==> $1"
 }
 
-# Só derruba a stack se este script chegou a subir alguma coisa. Falha nas pré-checagens
-# (porta ocupada, por exemplo) não pode parar um container que não é nosso.
 fail() {
     echo ""
     echo "ERRO: $1" >&2
@@ -67,10 +53,6 @@ fail() {
 warn() {
     echo "  AVISO: $1"
 }
-
-# --------------------------------------------------------------------------------------
-# Flags
-# --------------------------------------------------------------------------------------
 
 print_help() {
     cat <<'EOF'
@@ -117,10 +99,6 @@ parse_flags() {
     fi
 }
 
-# --------------------------------------------------------------------------------------
-# Pré-checagens
-# --------------------------------------------------------------------------------------
-
 port_is_busy() {
     local port="$1"
     if command -v ss >/dev/null 2>&1; then
@@ -128,7 +106,6 @@ port_is_busy() {
     elif command -v lsof >/dev/null 2>&1; then
         lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
     else
-        # Sem ferramenta para checar: não bloqueia a subida.
         return 1
     fi
 }
@@ -178,11 +155,6 @@ keycloak_container_is_running() {
 check_ports() {
     local port label busy=false
 
-    # A 5432 e a 8090 têm tratamento próprio: se quem está ouvindo é o nosso container (Postgres
-    # ou Keycloak, os dois serviços do docker-compose sem profile), o compose apenas o
-    # reaproveita — não é conflito. Sem isso, rodar ./start.sh com a stack já parcialmente de pé
-    # (ex.: Keycloak que sobrou de uma sessão anterior) falhava achando porta ocupada por
-    # "outro processo" quando na verdade era o próprio container esperado.
     if port_is_busy "$DB_PORT"; then
         if db_container_is_running; then
             info "container $DB_CONTAINER já está de pé — será reaproveitado"
@@ -244,10 +216,6 @@ check_prereqs() {
     check_llm
 }
 
-# --------------------------------------------------------------------------------------
-# Build
-# --------------------------------------------------------------------------------------
-
 jar_path() {
     local project="$1"
     find "$ROOT_DIR/$project/target" -maxdepth 1 -name '*.jar' ! -name '*-sources.jar' 2>/dev/null | head -n 1
@@ -268,9 +236,6 @@ build_webui() {
     info "dependências instaladas"
 }
 
-# Compilar é a exceção, não a regra: o padrão é subir o que já está construído. O único
-# caso em que o script compila sozinho é quando não há artefato nenhum — sem jar ou sem
-# node_modules não tem o que subir.
 build_all() {
     if [ "$FORCE_BUILD" = true ]; then
         step "Recompilando tudo (--build)"
@@ -305,12 +270,6 @@ build_all() {
     info "mudou o código? rode com --build"
 }
 
-# --------------------------------------------------------------------------------------
-# Espera
-# --------------------------------------------------------------------------------------
-
-# O 4º argumento é o PID da app. Se ela morreu (jar corrompido, porta em uso, exception
-# no startup), não faz sentido esperar o timeout inteiro — aborta na hora.
 wait_for_http() {
     local url="$1" label="$2" timeout="$3" pid="${4:-}"
     local waited=0
@@ -357,7 +316,6 @@ wait_for_port() {
     return 1
 }
 
-# $1 container, $2 usuário, $3 database, $4 rótulo
 wait_for_postgres_container() {
     local container="$1" user="$2" database="$3" label="$4"
     local timeout=60
@@ -397,34 +355,19 @@ wait_for_postgres() {
     return 1
 }
 
-# --------------------------------------------------------------------------------------
-# Subida
-# --------------------------------------------------------------------------------------
-
 start_postgres() {
     step "Subindo Postgres"
     STACK_STARTED=true
     docker compose -f "$COMPOSE_FILE" up -d || fail "falha ao subir o Postgres via docker compose."
     wait_for_postgres || fail "Postgres não ficou pronto em 60s. Veja: docker logs $DB_CONTAINER"
 
-    # Banco do agent: instância separada da de domínio, o agent não tem acesso ao logisticdb.
     wait_for_postgres_container "$AGENT_DB_CONTAINER" agent agentdb "Postgres do agent" \
         || fail "Postgres do agent não ficou pronto em 60s. Veja: docker logs $AGENT_DB_CONTAINER"
 
-    # Timeout maior que o dos outros: o Keycloak importa o realm no primeiro boot
-    # (--import-realm) e isso demora mais que uma subida normal.
     wait_for_http "http://localhost:$KEYCLOAK_MGMT_PORT/health/ready" "keycloak" 120 \
         || fail "Keycloak não ficou pronto em 120s. Veja: docker logs logistic-keycloak"
 }
 
-# O 'exec' faz o java substituir o subshell, então $! é o PID do próprio java —
-# sem isso o TERM iria para o subshell e deixaria o java órfão.
-# Carrega o .env da raiz (gitignored) — LLM_*/VITE_* pros respectivos apps, e deriva o
-# LANGFUSE_AUTH usado pelo agent pra exportar traces OTLP. Observabilidade é opcional: sem
-# .env (ou com LANGFUSE_CLIENT_ENABLED diferente de true) o agent sobe sem tracing nenhum.
-# LANGFUSE_CLIENT_ENABLED é independente do LANGFUSE_SERVER_ENABLED (esse último só decide
-# se os containers do Langfuse sobem via COMPOSE_PROFILES) — dá pra ter um Langfuse rodando
-# em outra máquina e só o client ligado.
 load_env() {
     if [ -f "$ENV_FILE" ]; then
         set -a
@@ -484,12 +427,6 @@ start_webui() {
     fi
 }
 
-# --------------------------------------------------------------------------------------
-# Seed
-# --------------------------------------------------------------------------------------
-
-# Conta pela role postgres, não pela logistic_ro: essa última só tem SELECT e existe
-# exclusivamente para a tool execute_query do logistic-api.
 count_drivers() {
     docker exec "$DB_CONTAINER" psql -U postgres -d logisticdb -tAc "SELECT count(*) FROM driver" 2>/dev/null | tr -d '[:space:]'
 }
@@ -545,9 +482,6 @@ seed_if_empty() {
     fi
 }
 
-# run_seed (acima) repopula só o banco de domínio. Sem isto, --reset deixava conversas, pendências
-# de confirmação e ofertas de gráfico referenciando motoristas e veículos que o reset apagou. Roda
-# depois de start_agent porque é o Flyway do agent, no boot dele, que cria as tabelas.
 reset_agent_state() {
     step "Limpando estado do agent"
 
@@ -571,12 +505,6 @@ reset_agent_state_if_confirmed() {
     fi
 }
 
-# --------------------------------------------------------------------------------------
-# Shutdown
-# --------------------------------------------------------------------------------------
-
-# O 'npm run dev' cria o Vite como processo filho; matar só o npm deixaria o Vite
-# segurando a 5173. Por isso o TERM vai para o pai e para os filhos diretos dele.
 kill_with_children() {
     local pid="$1" signal="$2"
     local child
@@ -611,7 +539,6 @@ SHUTDOWN_DONE=false
 shutdown() {
     local exit_code="${1:-0}"
 
-    # Idempotente: Ctrl+C durante a subida pode disparar isso mais de uma vez.
     if [ "$SHUTDOWN_DONE" = true ]; then
         return
     fi
@@ -624,7 +551,6 @@ shutdown() {
     stop_pid "$AGENT_PID" logistic-agent
     stop_pid "$API_PID" logistic-api
 
-    # 'stop' e não 'down': preserva o volume e os dados para o próximo start.
     info "parando o Postgres (dados preservados)"
     docker compose -f "$COMPOSE_FILE" stop >/dev/null 2>&1
 
@@ -656,10 +582,6 @@ print_urls() {
 EOF
 }
 
-# --------------------------------------------------------------------------------------
-# main
-# --------------------------------------------------------------------------------------
-
 main() {
     parse_flags "$@"
     trap shutdown INT TERM
@@ -677,7 +599,6 @@ main() {
     start_webui
     print_urls
 
-    # Fica em foreground até o Ctrl+C; se qualquer app morrer sozinho, derruba o resto.
     while true; do
         for entry in "$API_PID:logistic-api" "$AGENT_PID:logistic-agent" "$WEBUI_PID:logistic-webui"; do
             local pid="${entry%%:*}" label="${entry##*:}"

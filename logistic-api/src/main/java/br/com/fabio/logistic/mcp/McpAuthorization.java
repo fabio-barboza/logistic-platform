@@ -12,19 +12,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * Confere a role exigida por uma tool MCP, a partir do Bearer carregado no
- * {@link McpTransportContext}.
- *
- * <p>A checagem mora aqui, e não num {@code @PreAuthorize} no service, porque a tool executa numa
- * thread do {@code Schedulers.boundedElastic} (ver {@code McpServerFeatures$AsyncToolSpecification}):
- * o {@code SecurityContextHolder}, que é ThreadLocal, está vazio lá. O {@link McpTransportContext}
- * viaja pelo Reactor Context e não depende de thread.
- *
- * <p>Reaproveita o {@link JwtDecoder} já configurado em {@code SecurityConfig} — o mesmo validador
- * de audience das requisições REST. É essa validação que impede passthrough: um token do browser
- * (aud=logistic-agent) é recusado aqui.
- */
 @Component
 public class McpAuthorization {
 
@@ -34,11 +21,6 @@ public class McpAuthorization {
         this.jwtDecoder = jwtDecoder;
     }
 
-    /**
-     * Nega lançando {@link McpAuthorizationException}. O texto da mensagem carrega o marcador
-     * {@code insufficient_scope} — não um HTTP 403 real, ver a nota em
-     * {@code McpAuthorizationException}.
-     */
     public void require(McpTransportContext context, String scope) {
         String authorization = header(context);
         if (authorization == null || !authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {

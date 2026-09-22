@@ -17,10 +17,6 @@ import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-/**
- * Unitário: sem contexto Spring, sem H2, sem Keycloak. O {@link JwtDecoder} é dublê — a validação
- * real de assinatura/audience é responsabilidade dele (SecurityConfig), não desta classe.
- */
 class McpAuthorizationTest {
 
     private static final String TOKEN = "um-token-jwt-qualquer";
@@ -68,8 +64,6 @@ class McpAuthorizationTest {
         assertThatNoException().isThrownBy(() -> mcpAuthorization.require(contextWithBearer(TOKEN), "write"));
     }
 
-    /** Prova a proteção contra passthrough: um token rejeitado pelo JwtDecoder (aud errada,
-     * assinatura inválida, expirado) nunca chega a ter as roles conferidas. */
     @Test
     void tokenRejectedByDecoderDenies() {
         when(jwtDecoder.decode(TOKEN)).thenThrow(new JwtException("aud claim inválida"));

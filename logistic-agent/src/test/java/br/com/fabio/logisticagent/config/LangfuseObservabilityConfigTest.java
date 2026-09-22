@@ -13,10 +13,6 @@ import java.lang.reflect.Method;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * O predicate é o que impede o Langfuse de virar um mural de health check: o start.sh e o
- * webui batem em loop, e o @Scheduled do BackendHealthIndicator roda a cada 15s.
- */
 class LangfuseObservabilityConfigTest {
 
     private final ObservationPredicate predicate = new LangfuseObservabilityConfig().skipHealthChecks();

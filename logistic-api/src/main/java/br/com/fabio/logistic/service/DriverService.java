@@ -21,7 +21,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
 
-/** Fonte única de verdade para regras de negócio de motorista. Controller e tools MCP delegam aqui. */
 @Service
 public class DriverService {
 
@@ -78,12 +77,6 @@ public class DriverService {
         return driverMapper.toResponse(driver);
     }
 
-    /**
-     * Exclui o motorista. Recusa quando ele tem rotas: a FK route→driver é ON DELETE RESTRICT, e
-     * deixar o banco estourar devolveria um erro de constraint no lugar de uma explicação. Os
-     * vínculos com veículos caem por CASCADE — o retorno diz quantos, porque isso é efeito
-     * colateral que o usuário precisa enxergar.
-     */
     @Transactional
     public DeletionSummary delete(UUID id) {
         Driver driver = getOrThrow(id);

@@ -7,15 +7,11 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8090/realms/logistic}
+          issuer-uri: ${KEYCLOAK_ISSUER_URI}
   datasource:
-    # prepareThreshold=0 desliga prepared statements no lado do servidor (pgjdbc). Sem isso, o
-    # Postgres não consegue inferir o tipo de alguns parâmetros nas queries JPQL com "IN :lista"
-    # e "CAST(:param AS string)" do padrão de filtro dinâmico (erro "could not determine data
-    # type of parameter").
-    url: jdbc:postgresql://localhost:5432/logisticdb?prepareThreshold=0
-    username: postgres
-    password: postgres
+    url: ${API_DB_URL}
+    username: ${API_DB_USER}
+    password: ${API_DB_PASSWORD}
   jpa:
     hibernate:
       ddl-auto: validate
@@ -25,9 +21,6 @@ spring:
         format_sql: true
   flyway:
     enabled: true
-    # Duas pastas: db/migration é schema puro e roda também nos testes (H2); db/roles tem a V2,
-    # que cria a role logistic_ro com CREATE ROLE/GRANT — sintaxe que só existe no Postgres.
-    # Separar por pasta é o que deixa o H2 aplicar as migrations de schema sem tropeçar na V2.
     locations: classpath:db/migration,classpath:db/roles
   ai:
     mcp:
@@ -43,12 +36,9 @@ springdoc:
 
 logistic:
   readonly-datasource:
-    url: jdbc:postgresql://localhost:5432/logisticdb?prepareThreshold=0
-    username: logistic_ro
-    password: logistic_ro
+    url: ${API_DB_URL}
+    username: ${API_READONLY_DB_USER}
+    password: ${API_READONLY_DB_PASSWORD}
     connection-init-sql: "SET statement_timeout = '30s'"
   security:
-    # Audiencia esperada no token que chega aqui. Diferente da audiencia do logistic-agent
-    # (logistic-agent): e por isso que o token do browser nao serve, e e isso que o token
-    # exchange do agent resolve.
     audience: logistic-api

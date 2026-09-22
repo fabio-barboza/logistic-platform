@@ -25,12 +25,6 @@ class PendingActionMapperTest {
         return new PendingAction("acao-1", "sessao-1", toolName, argsJson, Instant.now(), details);
     }
 
-    /**
-     * O bean de JSON do Boot 4 é o {@code JsonMapper} do Jackson 3 ({@code tools.jackson}); o
-     * {@code com.fasterxml.jackson.databind.ObjectMapper} está no classpath por transitividade,
-     * mas não existe como bean — pedir por ele derrubava a aplicação no startup, e nenhum teste
-     * unitário via, porque nenhum subia contexto.
-     */
     @Test
     void wiresWithTheJsonMapperBeanFromAutoConfiguration() {
         new ApplicationContextRunner()
@@ -51,21 +45,18 @@ class PendingActionMapperTest {
                 .containsEntry("Estado", "SP");
     }
 
-    /** Nome prefixado pelo cliente MCP continua achando a frase. */
     @Test
     void handlesPrefixedToolNames() {
         assertThat(mapper.toDto(action("logistic_createVehicle", "{}")).summary())
                 .isEqualTo("Cadastrar um novo veículo");
     }
 
-    /** Tool sem entrada no mapa não pode virar card em branco. */
     @Test
     void unknownToolFallsBackToItsName() {
         assertThat(mapper.toDto(action("cancelRoute", "{}")).summary())
                 .isEqualTo("Executar a operação cancelRoute");
     }
 
-    /** Campo sem rótulo aparece com o nome cru — melhor que sumir da tela de confirmação. */
     @Test
     void unknownFieldKeepsItsRawName() {
         assertThat(mapper.toDto(action("createOrder", "{\"weird\":\"x\"}")).arguments())
@@ -78,7 +69,6 @@ class PendingActionMapperTest {
                 .containsEntry("Argumentos", "not json");
     }
 
-    /** Exclusão é irreversível: o card precisa nascer marcado para o frontend pintar diferente. */
     @Test
     void deleteToolsAreFlaggedAsDestructive() {
         assertThat(mapper.toDto(action("deleteDriver", "{\"id\":\"abc\"}")).destructive()).isTrue();
@@ -92,7 +82,6 @@ class PendingActionMapperTest {
         assertThat(mapper.toDto(action("deleteVehicle", "{}")).summary()).contains("EXCLUIR um veículo");
     }
 
-    /** Numa exclusão o card mostra o registro alvo; o UUID sozinho não deixa conferir nada. */
     @Test
     void deletionShowsTheTargetRecordBeforeTheId() {
         PendingActionDTO dto = mapper.toDto(action("deleteDriver",
@@ -106,11 +95,6 @@ class PendingActionMapperTest {
         assertThat(dto.arguments().keySet().iterator().next()).isIn("Nome", "E-mail");
     }
 
-    /**
-     * A ordem dos campos é a declarada no lookup — o card mostra "Nome, E-mail, Cidade, Estado",
-     * não o que o mapa resolver. Com dois campos o teste passava por sorte: {@code Map.copyOf}
-     * tem ordem de iteração não especificada, e ela muda de execução para execução.
-     */
     @Test
     void deletionDetailsKeepTheDeclaredOrder() {
         Map<String, String> details = new LinkedHashMap<>();

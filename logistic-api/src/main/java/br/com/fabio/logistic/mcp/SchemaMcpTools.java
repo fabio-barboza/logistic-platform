@@ -4,13 +4,6 @@ import io.modelcontextprotocol.common.McpTransportContext;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.stereotype.Component;
 
-/**
- * Tool que descreve o schema do banco para o modelo.
- * <p>
- * O mesmo texto vai na descrição do executeQuery, que está sempre no contexto — esta tool existe
- * para a pergunta explícita sobre o modelo de dados ("quais os status possíveis de uma rota?"),
- * não como pré-requisito da consulta. O texto mora em {@link SchemaText}.
- */
 @Component
 public class SchemaMcpTools {
 

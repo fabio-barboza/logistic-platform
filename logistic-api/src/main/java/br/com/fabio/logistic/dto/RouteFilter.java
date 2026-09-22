@@ -6,7 +6,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
-/** Todos os campos são opcionais e combinados em AND. */
 public record RouteFilter(
         List<RouteStatus> status,
         UUID driverId,

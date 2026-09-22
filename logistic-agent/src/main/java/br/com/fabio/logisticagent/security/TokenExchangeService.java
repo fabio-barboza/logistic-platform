@@ -20,24 +20,6 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Troca o token do usuário (aud=logistic-agent) por um com aud=logistic-api, via RFC 8693
- * (token exchange), para o agent falar com o /mcp da API sem fazer <i>token passthrough</i> —
- * proibido pela spec de autorização do MCP ("MCP servers MUST NOT accept or transit any other
- * tokens"), que é o vetor do confused deputy.
- *
- * <p><b>Peça de configuração que não é óbvia por código nenhum:</b> o Keycloak só coloca
- * {@code logistic-api} no {@code aud} do token trocado se o client <b>logistic-agent</b> (quem
- * pede a troca, não o alvo) tiver um protocol mapper de audience apontando para
- * {@code logistic-api} — mesmo padrão do mapper que {@code logistic-webui} já tem para
- * {@code logistic-agent} (ver {@code infra/keycloak/import/logistic-realm.json}). Faltando isso,
- * o Keycloak devolve 400 {@code invalid_request: "Requested audience not available: logistic-api"}
- * mesmo com {@code standard.token.exchange.enabled=true} nos dois clients — verificado no
- * bytecode do {@code StandardTokenExchangeProvider} (Keycloak 26.7): o exchange client-para-client
- * usa as <i>próprias</i> client scopes de quem pede a troca para montar o token resultante, não
- * as do client alvo. Marcar {@code standard.token.exchange.enabled} no {@code logistic-api}
- * (o alvo) não é necessário — só no requisitante.
- */
 @Service
 public class TokenExchangeService {
 
@@ -46,10 +28,6 @@ public class TokenExchangeService {
     private static final String GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange";
     private static final String SUBJECT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token";
 
-    /**
-     * O token trocado só é reaproveitado do cache com essa folga até expirar; perto do fim ele
-     * expiraria em uso (ex.: no meio de uma chamada de tool), então é tratado como já expirado.
-     */
     private static final Duration EXPIRY_SLACK = Duration.ofSeconds(60);
 
     private final RestClient restClient;
@@ -59,11 +37,6 @@ public class TokenExchangeService {
     private final String clientSecret;
     private final String targetAudience;
 
-    /**
-     * Chaveado pelo jti (ou sub+exp, se o jti não vier) do token de <b>entrada</b> — nunca pelo
-     * sub sozinho, senão o token trocado sobreviveria ao logout do usuário. Igual em espírito ao
-     * IPendingActionStore: ConcurrentHashMap com purga por TTL, sem trazer biblioteca de cache.
-     */
     private final Map<String, CachedToken> cache = new ConcurrentHashMap<>();
 
     private record CachedToken(String value, Instant expiresAt) {
@@ -85,7 +58,6 @@ public class TokenExchangeService {
         this.targetAudience = targetAudience;
     }
 
-    /** @return access token com aud={@code target-audience}, pronto para o header Authorization */
     public String exchangeFor(String subjectToken) {
         Instant now = Instant.now();
         String key = cacheKey(subjectToken, now);
@@ -118,9 +90,7 @@ public class TokenExchangeService {
                     .retrieve()
                     .body(Map.class);
         } catch (HttpStatusCodeException e) {
-            // O Keycloak devolve error_description útil (token exchange desligado no client,
-            // audiência desconhecida, subject token expirado) — vale mais para o usuário, no
-            // caminho de erro do chat, do que o stack trace da exceção HTTP.
+
             throw new RuntimeException("Troca de token falhou: " + errorDescription(e.getResponseBodyAsString()), e);
         }
 
@@ -154,8 +124,7 @@ public class TokenExchangeService {
             }
             return jwt.getSubject() + "|" + jwt.getExpiresAt();
         } catch (JwtException e) {
-            // Não deveria acontecer — o token já passou pelo resource server para chegar aqui —
-            // mas sem chave estável o pior caso é não reaproveitar o cache, não quebrar a troca.
+
             log.warn("Não foi possível decodificar o token de entrada para chave de cache: {}", e.getMessage());
             return subjectToken;
         }

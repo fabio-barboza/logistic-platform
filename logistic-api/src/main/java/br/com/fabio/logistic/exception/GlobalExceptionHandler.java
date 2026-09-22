@@ -12,7 +12,6 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import java.util.HashMap;
 import java.util.Map;
 
-/** Ponto único de tradução de exceções em respostas HTTP no shape padrão da API. */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 

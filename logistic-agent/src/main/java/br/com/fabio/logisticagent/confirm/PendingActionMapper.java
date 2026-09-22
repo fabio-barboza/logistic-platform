@@ -11,20 +11,11 @@ import tools.jackson.databind.json.JsonMapper;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/**
- * Traduz a pendência para o que o usuário lê antes de confirmar.
- *
- * <p>O texto é montado em código, e não pedido ao modelo, pelo mesmo motivo de o payload
- * confirmado ser o payload registrado: se a frase da confirmação viesse da LLM, o usuário
- * aprovaria a descrição dela e não a chamada que vai rodar — e as duas divergem justamente nos
- * casos em que a confirmação importa.
- */
 @Component
 public class PendingActionMapper {
 
     private static final Logger log = LoggerFactory.getLogger(PendingActionMapper.class);
 
-    /** Uma frase por tool de escrita. Tool nova sem entrada aqui cai no fallback com o nome cru. */
     private static final Map<String, String> ACTION_PT = Map.ofEntries(
             Map.entry("createDriver", "Cadastrar um novo motorista"),
             Map.entry("linkDriverVehicle", "Vincular um veículo a um motorista"),
@@ -37,7 +28,6 @@ public class PendingActionMapper {
             Map.entry("deleteDriver", "EXCLUIR um motorista (irreversível)"),
             Map.entry("deleteVehicle", "EXCLUIR um veículo da frota (irreversível)"));
 
-    /** Rótulo PT-BR dos argumentos, para a tela não mostrar "birthday" e "zipCode". */
     private static final Map<String, String> FIELD_PT = Map.ofEntries(
             Map.entry("id", "Id"),
             Map.entry("name", "Nome"),
@@ -68,11 +58,6 @@ public class PendingActionMapper {
                 displayed(action), destructive(action.toolName()));
     }
 
-    /**
-     * O que o card mostra. Numa exclusão são os campos do registro alvo — o argumento é só um
-     * UUID, e confirmar um UUID não é conferir nada, ainda mais com nome de motorista não sendo
-     * único. Nas demais ações os próprios argumentos já são o que o usuário informou.
-     */
     private Map<String, String> displayed(PendingAction action) {
         if (action.details().isEmpty()) {
             return arguments(action.argsJson());
@@ -82,10 +67,6 @@ public class PendingActionMapper {
         return displayed;
     }
 
-    /**
-     * Exclusão é irreversível e não tem "desfazer" na plataforma — o card precisa parecer diferente
-     * de um cadastro. Deriva do nome da tool: {@code delete*} nasce marcada, sem lista para manter.
-     */
     private boolean destructive(String toolName) {
         return simpleName(toolName).startsWith("delete");
     }
@@ -94,9 +75,6 @@ public class PendingActionMapper {
         return toolName.substring(toolName.lastIndexOf('_') + 1);
     }
 
-    /** Rótulo PT-BR de um campo, ou o nome cru quando não há tradução. Usado também na crítica
-     * de campo obrigatório faltando, para o modelo perguntar ao usuário com o mesmo nome que a
-     * tela mostra depois. */
     public String label(String field) {
         return FIELD_PT.getOrDefault(field, field);
     }
@@ -106,11 +84,6 @@ public class PendingActionMapper {
         return ACTION_PT.getOrDefault(simpleName, "Executar a operação " + simpleName);
     }
 
-    /**
-     * Argumentos do modelo, achatados em texto. Falha de parse não derruba a confirmação: a ação
-     * segue válida (o que será executado é o JSON cru, não este mapa) e a tela mostra o payload
-     * como veio.
-     */
     private Map<String, String> arguments(String argsJson) {
         Map<String, String> arguments = new LinkedHashMap<>();
         try {

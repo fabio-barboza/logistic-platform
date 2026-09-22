@@ -29,21 +29,10 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Três peças, todas contraintuitivas fora de contexto — cada uma existe por um motivo
- * específico documentado abaixo.
- */
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
 
-    /**
-     * O Keycloak põe as roles em {@code realm_access.roles}; o
-     * {@code JwtGrantedAuthoritiesConverter} padrão do Spring lê {@code scope}/{@code scp} e
-     * não enxerga isso. Sem este conversor, todo usuário chega sem authority nenhuma e toda
-     * regra de {@code hasRole} nega. Prefixo {@code ROLE_} porque {@code hasRole("chat")}
-     * procura exatamente isso.
-     */
     private JwtAuthenticationConverter realmRolesConverter() {
         JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
         converter.setJwtGrantedAuthoritiesConverter(realmRolesGrantedAuthoritiesConverter());
@@ -65,11 +54,6 @@ public class SecurityConfig {
         };
     }
 
-    /**
-     * Validador de audience, composto com o validador padrão do issuer. Sem isso, um token
-     * emitido para outro recurso (ex.: {@code logistic-api}) seria aceito aqui também —
-     * confused deputy. Validação de audience é regra inviolável deste plano.
-     */
     @Bean
     JwtDecoder jwtDecoder(OAuth2ResourceServerProperties props,
             @Value("${logistic.security.audience}") String audience) {
@@ -82,31 +66,22 @@ public class SecurityConfig {
         return decoder;
     }
 
-    /**
-     * As regras que o usuário pediu. Nenhuma regra menciona {@code admin}: a role composta do
-     * Keycloak já expande em chat/read/write no token — quem tem {@code admin} recebe as três
-     * authorities e passa em qualquer uma das checagens abaixo sem código extra aqui.
-     */
     @Bean
     SecurityFilterChain filterChain(HttpSecurity http, JwtDecoder jwtDecoder) throws Exception {
         return http
-                // CORS precisa entrar na cadeia: sem isso o preflight OPTIONS toma 401 antes de
-                // chegar ao WebMvcConfigurer, e o browser nem chega a mandar o POST.
+
                 .cors(Customizer.withDefaults())
-                // API stateless com bearer token: não há sessão nem formulário para proteger, e
-                // o CSRF token quebraria o POST do webui sem ganho nenhum.
+
                 .csrf(CsrfConfigurer::disable)
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // Polling do start.sh e do próprio webui, antes de qualquer login.
+
                         .requestMatchers(HttpMethod.GET, "/api/chat/health").permitAll()
                         .requestMatchers("/actuator/health/**", "/actuator/health").permitAll()
                         .requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/api-docs/**").permitAll()
-                        // O preflight não carrega Authorization.
+
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                        // Ordem importa: /api/chat/confirm tem que vir ANTES de /api/chat, senão
-                        // o matcher mais genérico captura primeiro e a confirmação passaria a
-                        // exigir só "chat" em vez de "write".
+
                         .requestMatchers(HttpMethod.POST, "/api/chat/confirm").hasRole("write")
                         .requestMatchers(HttpMethod.POST, "/api/chat").hasRole("chat")
                         .anyRequest().authenticated())

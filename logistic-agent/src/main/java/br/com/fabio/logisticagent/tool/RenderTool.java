@@ -13,32 +13,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * Desenha gráfico ou tabela a partir do resultado do último executeQuery da requisição.
- *
- * <p><b>O modelo escolhe o que mostrar; nunca os valores.</b> Ele informa o tipo do gráfico e quais
- * colunas usar, e os números saem do {@link QueryResultHolder} — as linhas que o banco devolveu.
- * Antes o modelo digitava {@code labels} e {@code data} nos argumentos, e dado inventado na tela
- * era possível: a tool não tinha como saber se aquele 68 tinha vindo de algum lugar. Agora não é
- * detectado, é impossível.
- *
- * <p>Isso apagou junto toda a máquina de recusa que existia por causa de argumento inválido
- * (tamanho de labels diferente do de data, linha com menos células que colunas, o teto de recusas
- * e o render truncado de último recurso): sem valores nos argumentos, não há o que validar. Erro
- * de coluna continua possível e é devolvido com a lista de colunas reais, que o modelo consegue
- * corrigir numa tentativa.
- */
 @Component
 public class RenderTool {
 
     private static final Logger log = LoggerFactory.getLogger(RenderTool.class);
     private static final Set<String> VALID_CHART_TYPES = Set.of("bar", "line", "pie", "doughnut");
 
-    /**
-     * Status em PT-BR para o que vai desenhado na tela. O system prompt manda traduzir, mas o modelo
-     * traduzia o texto da resposta e deixava o enum cru na tela. Tradução de enum é determinística,
-     * então é código. Mantenha em sincronia com o system prompt e com V1__init.sql.
-     */
     private static final Map<String, String> STATUS_PT = Map.ofEntries(
             Map.entry("IN_PROGRESS", "Em andamento"),
             Map.entry("COMPLETED", "Concluído"),
@@ -128,7 +108,6 @@ public class RenderTool {
                 + "Vale só para esta resposta; para trocar as colunas, chame renderTable de novo.";
     }
 
-    /** Coluna inexistente é o único erro de argumento que sobrou — e ele se corrige com a lista real. */
     private String checkColumns(String... names) {
         for (String name : names) {
             if (!queryResults.hasColumn(name)) {
@@ -142,7 +121,6 @@ public class RenderTool {
         return "Colunas disponíveis: " + String.join(", ", queryResults.columns()) + ".";
     }
 
-    /** Célula não numérica vira 0: o gráfico desenha, e o modelo vê pelo resultado que errou a coluna. */
     private List<Number> numbers(List<String> values) {
         return values.stream().map(value -> {
             try {
@@ -157,7 +135,6 @@ public class RenderTool {
         return values.stream().map(this::translateStatus).toList();
     }
 
-    /** Só troca a célula que é exatamente um status; o resto passa intacto. */
     private String translateStatus(String value) {
         if (value == null) {
             return null;

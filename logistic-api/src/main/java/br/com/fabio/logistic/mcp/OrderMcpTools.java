@@ -11,7 +11,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.UUID;
 
-/** Tools MCP de pedido — só escrita; leitura é via executeQuery. */
 @Component
 public class OrderMcpTools {
 

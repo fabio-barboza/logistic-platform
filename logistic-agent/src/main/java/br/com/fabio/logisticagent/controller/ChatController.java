@@ -41,10 +41,6 @@ public class ChatController {
         return ResponseEntity.ok(chatService.respond(request.message(), sessionId));
     }
 
-    /**
-     * Resposta do usuário a uma ação de escrita pendente. Não passa pela LLM: executa (ou
-     * descarta) a chamada de tool já registrada, com os argumentos originais.
-     */
     @PostMapping("/confirm")
     public ResponseEntity<ChatMessageDTO> confirm(@RequestBody ConfirmRequestDTO request) {
         return ResponseEntity.ok(confirmationService.resolve(request));

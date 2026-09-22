@@ -6,7 +6,6 @@ import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.stereotype.Component;
 
-/** Tool MCP de SQL read-only — delega ao QueryService, sem lógica própria. */
 @Component
 public class QueryMcpTools {
 

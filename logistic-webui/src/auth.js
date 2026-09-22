@@ -1,18 +1,19 @@
-// Autenticação via Keycloak com Authorization Code + PKCE, em JS puro (sem lib): o fluxo cabe
-// em poucas linhas e evita uma dependência de segurança extra para manter. Se algum dia isso
-// ficar mais custoso que o previsto, a alternativa aceitável é `oidc-client-ts`.
+function requireEnv(name, value) {
+  if (!value) {
+    throw new Error(`${name} não configurada — defina no .env da raiz.`)
+  }
+  return value
+}
 
-const KC_URL = import.meta.env.VITE_KEYCLOAK_URL ?? 'http://localhost:8090'
-const REALM = import.meta.env.VITE_KEYCLOAK_REALM ?? 'logistic'
-const CLIENT_ID = import.meta.env.VITE_KEYCLOAK_CLIENT_ID ?? 'logistic-webui'
+const KC_URL = requireEnv('VITE_KEYCLOAK_URL', import.meta.env.VITE_KEYCLOAK_URL)
+const REALM = requireEnv('VITE_KEYCLOAK_REALM', import.meta.env.VITE_KEYCLOAK_REALM)
+const CLIENT_ID = requireEnv('VITE_KEYCLOAK_CLIENT_ID', import.meta.env.VITE_KEYCLOAK_CLIENT_ID)
 
 const AUTH_ENDPOINT = `${KC_URL}/realms/${REALM}/protocol/openid-connect/auth`
 const TOKEN_ENDPOINT = `${KC_URL}/realms/${REALM}/protocol/openid-connect/token`
 const END_SESSION_ENDPOINT = `${KC_URL}/realms/${REALM}/protocol/openid-connect/logout`
 const REDIRECT_URI = window.location.origin + '/'
 
-// sessionStorage, não localStorage: sobrevive ao F5, morre ao fechar a aba — mesmo
-// comportamento que o chat já tem (sessionId novo a cada load, histórico só no DOM).
 const SS_VERIFIER = 'kc_pkce_verifier'
 const SS_STATE = 'kc_pkce_state'
 const SS_ACCESS_TOKEN = 'kc_access_token'
@@ -25,8 +26,6 @@ const IDLE_TIMEOUT_MS = 5 * 60 * 1000
 const REFRESH_MARGIN_MS = 60 * 1000
 const ACTIVITY_THROTTLE_MS = 1000
 const MAX_REDIRECT_ATTEMPTS = 2
-
-/* ---------- PKCE ---------- */
 
 function base64UrlEncode(bytes) {
     let binary = ''
@@ -53,8 +52,6 @@ async function deriveCodeChallenge(verifier) {
     return base64UrlEncode(new Uint8Array(digest))
 }
 
-/* ---------- Tokens ---------- */
-
 function setTokens({ access_token, refresh_token, id_token, expires_in }) {
     sessionStorage.setItem(SS_ACCESS_TOKEN, access_token)
     if (refresh_token) sessionStorage.setItem(SS_REFRESH_TOKEN, refresh_token)
@@ -69,8 +66,6 @@ function clearTokens() {
 function hasSession() {
     return !!sessionStorage.getItem(SS_ACCESS_TOKEN)
 }
-
-/* ---------- Login ---------- */
 
 export async function login() {
     const verifier = randomToken(64).slice(0, 128)
@@ -91,15 +86,11 @@ export async function login() {
     window.location.assign(`${AUTH_ENDPOINT}?${params.toString()}`)
 }
 
-/* ---------- Logout ---------- */
-
 export function logout() {
     const idToken = sessionStorage.getItem(SS_ID_TOKEN)
     clearTokens()
     sessionStorage.removeItem(SS_REDIRECT_ATTEMPTS)
 
-    // Encerrar só do lado do cliente deixaria a sessão SSO viva no Keycloak — o próximo
-    // login entraria sozinho, sem pedir senha.
     const params = new URLSearchParams({
         client_id: CLIENT_ID,
         post_logout_redirect_uri: REDIRECT_URI,
@@ -108,21 +99,12 @@ export function logout() {
     window.location.assign(`${END_SESSION_ENDPOINT}?${params.toString()}`)
 }
 
-/* ---------- Callback (volta do Keycloak) ---------- */
-
 function redirectAttemptsExceeded() {
     const attempts = Number(sessionStorage.getItem(SS_REDIRECT_ATTEMPTS) ?? '0') + 1
     sessionStorage.setItem(SS_REDIRECT_ATTEMPTS, String(attempts))
     return attempts > MAX_REDIRECT_ATTEMPTS
 }
 
-/**
- * Resolve o estado de autenticação ao carregar a página. Devolve `true` se há uma sessão
- * utilizável (já existente, ou trocada com sucesso a partir do `?code=` da URL) e `false`
- * quando é preciso chamar login(). Lança se o loop de redirect já tentou demais — sinal de
- * `handleCallback` falhando silenciosamente e derrubando o usuário de volta no Keycloak toda
- * vez (redirectUris do realm desalinhado, por exemplo).
- */
 export async function handleCallback() {
     if (hasSession()) return true
 
@@ -136,8 +118,6 @@ export async function handleCallback() {
     sessionStorage.removeItem(SS_STATE)
     sessionStorage.removeItem(SS_VERIFIER)
 
-    // Limpa a URL de qualquer forma: deixar code/state na barra de endereço é vazamento em
-    // histórico e em referer, mesmo se a troca abaixo falhar.
     history.replaceState({}, '', window.location.pathname)
 
     if (!returnedState || returnedState !== expectedState || !verifier) {
@@ -177,8 +157,6 @@ export async function handleCallback() {
     }
 }
 
-/* ---------- Token de acesso (renovação atrelada a atividade) ---------- */
-
 async function refreshAccessToken() {
     const refreshToken = sessionStorage.getItem(SS_REFRESH_TOKEN)
     if (!refreshToken) {
@@ -202,13 +180,6 @@ async function refreshAccessToken() {
     return sessionStorage.getItem(SS_ACCESS_TOKEN)
 }
 
-// IMPORTANTE — NÃO transformar isto num setInterval renovando sozinho.
-//
-// getToken() só é chamado de dentro de authenticatedFetch(), que só roda quando o usuário faz
-// alguma coisa (enviar mensagem, confirmar ação). Se o token fosse renovado num timer
-// independente da atividade do usuário, o Keycloak nunca veria a sessão ociosa e o requisito
-// de 5 minutos de inatividade (SSO Session Idle) deixaria de valer — a aba ficaria logada
-// para sempre sozinha.
 async function getToken() {
     const expiresAt = Number(sessionStorage.getItem(SS_EXPIRES_AT) ?? '0')
     if (Date.now() < expiresAt - REFRESH_MARGIN_MS) {
@@ -217,8 +188,6 @@ async function getToken() {
     return refreshAccessToken()
 }
 
-/* ---------- Ociosidade ---------- */
-
 let idleTimer = null
 let inFlightRequests = 0
 let lastActivityTick = 0
@@ -226,9 +195,6 @@ let lastActivityTick = 0
 function armIdleTimer() {
     if (idleTimer) clearTimeout(idleTimer)
     idleTimer = setTimeout(() => {
-        // Requisição em andamento conta como atividade: uma pergunta pode levar até 310s
-        // (REQUEST_TIMEOUT_MS no main.js). Sem isso, quem faz uma pergunta pesada e tira a
-        // mão do mouse é deslogado no meio da resposta.
         if (inFlightRequests > 0) {
             armIdleTimer()
             return
@@ -250,8 +216,6 @@ export function startIdleWatch() {
         window.addEventListener(evt, onActivity, { passive: true }))
     armIdleTimer()
 }
-
-/* ---------- Fetch autenticado ---------- */
 
 export async function authenticatedFetch(url, options = {}) {
     inFlightRequests++
@@ -280,10 +244,6 @@ export async function authenticatedFetch(url, options = {}) {
     }
 }
 
-/* ---------- Usuário atual ---------- */
-
-// Decodifica o payload do JWT só em base64, sem validar assinatura — validação é
-// responsabilidade do servidor. Aqui é só para exibir nome e roles na tela.
 export function currentUser() {
     const token = sessionStorage.getItem(SS_ACCESS_TOKEN)
     if (!token) return null

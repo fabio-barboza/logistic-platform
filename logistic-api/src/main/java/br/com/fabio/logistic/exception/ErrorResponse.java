@@ -3,7 +3,6 @@ package br.com.fabio.logistic.exception;
 import java.time.LocalDateTime;
 import java.util.Map;
 
-/** Formato único de erro devolvido pela API. */
 public record ErrorResponse(
         LocalDateTime timestamp,
         int status,

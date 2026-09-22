@@ -5,7 +5,6 @@ import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 
-/** Roda o contrato contra a implementação de produção. */
 @DataJpaTest
 @ActiveProfiles("test")
 @Import(ConversationStateStoreImpl.class)

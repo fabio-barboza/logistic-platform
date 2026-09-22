@@ -1,18 +1,5 @@
 package br.com.fabio.logistic.mcp;
 
-/**
- * Texto do schema, em constantes, para poder entrar na descrição de mais de uma {@code @McpTool}.
- * <p>
- * Está aqui, e não gerado em runtime, porque descrição de tool é anotação e anotação exige
- * constante de compilação. O preço é sincronia manual com {@code V1__init.sql} e com os enums do
- * domínio — cobrada por {@code SchemaTextTest}, que quebra quando um status novo não aparece aqui.
- * <p>
- * Por que duplicar o schema na descrição do executeQuery em vez de deixar só o describeSchema:
- * descrição de tool está sempre no contexto, tool precisa ser chamada. Numa rodada do eval, 31
- * casos usaram executeQuery e só 2 chamaram describeSchema antes — o modelo escrevia SQL de
- * memória e errava nome de coluna ("zipCode" em vez de zip_code). Isso só se sustenta porque o
- * banco tem 5 tabelas; com um schema grande, o caminho seria devolver o schema no erro da query.
- */
 final class SchemaText {
 
     private SchemaText() {
@@ -96,6 +83,5 @@ final class SchemaText {
                troque só o que o usuário mudou. Reescrever a query do zero perde o recorte.
             """;
 
-    /** Schema inteiro, na ordem em que o modelo precisa ler. */
     static final String FULL = TABLES + "\n" + ENUMS + "\n" + RELATIONSHIPS + "\n" + QUERY_RULES;
 }

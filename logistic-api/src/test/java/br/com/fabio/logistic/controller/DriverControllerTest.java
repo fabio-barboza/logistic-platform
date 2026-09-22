@@ -44,10 +44,6 @@ class DriverControllerTest {
     @MockitoBean
     private DriverService driverService;
 
-    // A fábrica do JwtDecoder real (SecurityConfig) chama JwtDecoders.fromIssuerLocation, que
-    // faz uma chamada HTTP ao Keycloak na criação do bean. O jwt() request post-processor abaixo
-    // não passa pelo decoder — autentica direto no SecurityContext — então mockar aqui evita que
-    // o @WebMvcTest dependa do Keycloak estar no ar.
     @MockitoBean
     private JwtDecoder jwtDecoder;
 
@@ -113,7 +109,6 @@ class DriverControllerTest {
                 .andExpect(status().isNoContent());
     }
 
-    /** Motorista com rota é conflito, não erro interno: a FK route→driver é RESTRICT. */
     @Test
     void exclusaoDeMotoristaComRotasDevolve409() throws Exception {
         UUID id = UUID.randomUUID();

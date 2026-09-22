@@ -13,10 +13,6 @@ import java.time.temporal.ChronoUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Exercita {@link AgentStatePurge} contra o schema real da migration, incluindo
- * {@code spring_ai_chat_memory} — o corte dela é pela conversa inteira, não mensagem a mensagem.
- */
 @DataJpaTest
 @ActiveProfiles("test")
 @Import(AgentStatePurge.class)
@@ -32,10 +28,6 @@ class AgentStatePurgeTest {
     void deletesRowsPastTheTtlAndKeepsRecentOnes() {
         Instant now = Instant.now();
 
-        // ChatMemory: o corte é pela conversa inteira, não mensagem a mensagem — "old-conv" some
-        // por inteiro (a mensagem de 30h incluída) porque a ÚLTIMA mensagem dela já passou de
-        // 24h; "recent-conv" fica intacta porque a última mensagem é recente, mesmo tendo uma
-        // mensagem tão antiga quanto a que foi apagada da outra conversa.
         insertChatMessage("old-conv", 1, Timestamp.from(now.minus(25, ChronoUnit.HOURS)));
         insertChatMessage("recent-conv", 1, Timestamp.from(now.minus(30, ChronoUnit.HOURS)));
         insertChatMessage("recent-conv", 2, Timestamp.from(now.minus(1, ChronoUnit.HOURS)));

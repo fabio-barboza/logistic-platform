@@ -12,7 +12,6 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDate;
 import java.util.UUID;
 
-/** Tools MCP de motorista — só escrita; leitura é via executeQuery. */
 @Component
 public class DriverMcpTools {
 

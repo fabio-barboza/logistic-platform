@@ -9,25 +9,12 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
 
-/**
- * Checa, ANTES de o Spring subir o contexto, que o ambiente do eval está de pé:
- * a logistic-api (de onde vêm as tools MCP), a LLM, o Keycloak e o Postgres.
- *
- * <p>Roda como {@link ExecutionCondition} de propósito: o JUnit avalia condições antes dos
- * callbacks que carregam o contexto, então o erro sai como uma frase acionável em vez de um
- * "Failed to load ApplicationContext" de trinta linhas.
- *
- * <p>Falha em vez de pular: quem roda {@code -Peval} está pedindo o eval explicitamente, e um
- * skip verde esconderia que nada foi medido.
- */
 public class EvalEnvironmentCondition implements ExecutionCondition {
 
     private static final String API_URL = System.getProperty("eval.api.url", "http://localhost:8081");
     private static final String LLM_URL = System.getProperty("eval.llm.url", "http://localhost:8200");
     private static final String KEYCLOAK_URL = System.getProperty("eval.keycloak.url", "http://localhost:8090");
-    // host:porta, não URL: o Postgres não fala HTTP, então o check é um connect TCP cru (ver
-    // reachableTcp) em vez do HttpURLConnection usado pelos três de cima. O default espelha
-    // o host/porta embutidos no AGENT_DB_URL default de application.yml.
+
     private static final String POSTGRES_HOST_PORT = System.getProperty("eval.postgres.url", "localhost:5432");
 
     @Override
@@ -48,9 +35,7 @@ public class EvalEnvironmentCondition implements ExecutionCondition {
                     (ou aponte para outro com -Deval.llm.url=<url>).
                     """.formatted(LLM_URL));
         }
-        // A perna agent -> /mcp exige token: sem o Keycloak no ar, o eval falha
-        // tarde (a meio do contexto do Spring, num JwtDecoder que resolve o issuer na criação do
-        // bean) e com um erro que não aponta para a causa real.
+
         if (!reachable(KEYCLOAK_URL + "/realms/logistic/.well-known/openid-configuration")) {
             throw new IllegalStateException("""
 
@@ -60,10 +45,7 @@ public class EvalEnvironmentCondition implements ExecutionCondition {
                     Suba a stack com ./start.sh (ou aponte para outro com -Deval.keycloak.url=<url>).
                     """.formatted(KEYCLOAK_URL));
         }
-        // O contexto Spring completo do agent (ChatMemory, IPendingActionStore,
-        // IConversationStateStore) exige datasource. Sem este check, a falha
-        // apareceria tarde — dentro da criação do DataSource/Flyway — com um erro que não aponta
-        // a causa, o mesmo motivo que levou ao check do Keycloak.
+
         if (!reachableTcp(POSTGRES_HOST_PORT)) {
             throw new IllegalStateException("""
 
@@ -90,12 +72,6 @@ public class EvalEnvironmentCondition implements ExecutionCondition {
         }
     }
 
-    /**
-     * Connect TCP cru: Postgres não fala HTTP, então não dá para reusar {@link #reachable(String)}.
-     * Só confirma que algo aceita conexão na porta — não autentica nem abre o banco de fato, o
-     * mesmo nível de garantia que os três checks HTTP acima (eles também não validam o corpo da
-     * resposta, só que o servidor respondeu).
-     */
     private static boolean reachableTcp(String hostPort) {
         String[] parts = hostPort.split(":", 2);
         String host = parts[0];

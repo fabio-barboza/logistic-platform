@@ -9,7 +9,6 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
-/** Implementação de produção do {@link IPendingActionStore}, sobre a tabela {@code pending_action}. */
 @Component
 public class PendingActionStoreImpl implements IPendingActionStore {
 
@@ -31,10 +30,6 @@ public class PendingActionStoreImpl implements IPendingActionStore {
         return action;
     }
 
-    /**
-     * O TTL entra na própria busca para uma pendência vencida não ser resgatável antes de a purga
-     * passar por ela. O delete decide o consumo único: 0 linhas significa que alguém chegou antes.
-     */
     @Override
     @Transactional
     public PendingAction take(String id, String sessionId) {

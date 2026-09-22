@@ -24,7 +24,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** Fonte única de verdade para regras de negócio de rota. Controller e tools MCP delegam aqui. */
 @Service
 public class RouteService {
 

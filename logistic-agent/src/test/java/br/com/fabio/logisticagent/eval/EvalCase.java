@@ -4,33 +4,6 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.util.List;
 
-/**
- * Um caso do dataset de eval.
- *
- * <p>Um caso só passa se <b>todas</b> as expectativas declaradas passarem. Campos nulos não são
- * avaliados — cada caso mede o que é específico dele, e nada mais.
- *
- * @param id          identificador curto, usado no relatório
- * @param setup       pergunta opcional feita antes, na mesma sessão (testa memória conversacional)
- * @param question    a pergunta avaliada
- * @param expectAnyOf o modelo deve chamar pelo menos uma destas tools
- * @param forbid      o modelo não pode chamar nenhuma destas tools
- * @param expectNoTool nenhuma tool MCP pode ser chamada (saudação, pergunta fora do domínio, pedido recusado)
- * @param expectArgs  trechos que devem aparecer nos argumentos das tools de {@code expectAnyOf}
- *                    (comparação sem espaços e case-insensitive, ex.: {@code "\"state\":\"SP\""});
- *                    alternativas equivalentes vão separadas por {@code ||}, e basta uma casar
- * @param forbidArgs  trechos que não podem aparecer nesses mesmos argumentos (ex.: um filtro que
- *                    distorce a contagem, como {@code "r.status="} numa pergunta sobre falha de pedido)
- * @param maxCalls    número máximo de chamadas MCP aceitas — pega o modelo que tateia até acertar
- * @param render      render esperado: "chart", "table", "none" ou null (não avaliado)
- * @param chartType   tipo de gráfico esperado quando {@code render} é "chart" (bar, line, pie, doughnut)
- * @param expectColumns colunas exatas esperadas quando o render é uma tabela, na ordem
- * @param expectText  trechos que devem aparecer na resposta final — texto e payload de render (case-insensitive)
- * @param forbidText  trechos que não podem aparecer na resposta final, texto ou render
- *                    (ex.: enum cru vazando para o usuário numa célula de tabela)
- * @param pendingAction nome da tool de escrita que deve ficar aguardando confirmação, ou "none"
- *                    para exigir que a resposta não registre escrita nenhuma
- */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record EvalCase(
         String id,

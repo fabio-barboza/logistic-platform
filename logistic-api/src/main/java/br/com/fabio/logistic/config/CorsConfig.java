@@ -4,7 +4,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
-/** Libera o agent (:8080) a chamar a API. /mcp fica aberto de propósito, para inspeção com MCP Inspector. */
 @Configuration
 public class CorsConfig implements WebMvcConfigurer {
 

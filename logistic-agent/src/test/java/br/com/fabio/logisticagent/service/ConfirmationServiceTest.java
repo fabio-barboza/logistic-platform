@@ -36,12 +36,6 @@ class ConfirmationServiceTest {
     private ChatMemory chatMemory;
     private ConfirmationService confirmationService;
 
-    /**
-     * A tool "createDriver" que o {@code ToolCallbackProvider} abaixo devolve. Mutável porque cada
-     * teste chama {@link #register} com um comportamento diferente, e o provider é lido de novo a
-     * cada {@code resolve()} — o mesmo padrão real de {@code ConfirmationService}, que resolve o
-     * callback pelo nome só na hora de confirmar, nunca guardado no {@code PendingAction}.
-     */
     private ToolCallback currentCallback;
 
     @BeforeEach
@@ -67,7 +61,6 @@ class ConfirmationServiceTest {
         SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(jwt, List.of()));
     }
 
-    /** Tool falsa no lugar da chamada MCP: o que importa aqui é o payload que chega nela. */
     private PendingAction register(UnaryOperator<String> body) {
         return register("sessao-1", body);
     }
@@ -123,7 +116,6 @@ class ConfirmationServiceTest {
         assertThat(memory()).contains("CANCELOU");
     }
 
-    /** Segundo clique (ou pendência expirada) não pode executar de novo. */
     @Test
     void secondConfirmationOfTheSameActionDoesNothing() {
         PendingAction action = register(input -> {
@@ -152,7 +144,6 @@ class ConfirmationServiceTest {
         assertThat(memory()).contains("FALHOU").contains("Nada foi gravado");
     }
 
-    /** O MCP devolve o registro dentro de uma string escapada; a tela não pode mostrar isso cru. */
     @Test
     void mcpEnvelopeIsUnwrappedForTheUser() {
         PendingAction action = register(input ->
@@ -166,12 +157,6 @@ class ConfirmationServiceTest {
                 .doesNotContain("\\\"");
     }
 
-    /**
-     * A pendência é resgatada pela chave de conversa (sub + sessionId), não pelo
-     * sessionId cru — resolve() computa essa chave a partir do usuário autenticado na requisição
-     * de confirmação. Sem isso, o mesmo sessionId (sessionStorage forçado, ou coincidência)
-     * resgataria a pendência de outro usuário.
-     */
     @Test
     void pendingActionIsNotResolvableByAnotherUserWithTheSameSessionId() {
         authenticateAs("user-1");
@@ -196,18 +181,13 @@ class ConfirmationServiceTest {
         assertThat(okResponse.content()).contains("executada");
     }
 
-    /**
-     * Quem recebe o clique pode não ter a tool no handshake MCP do próprio startup (API fora do ar
-     * quando ele subiu). A mensagem tem que dizer "indisponível", e não "ação não encontrada": são
-     * causas diferentes e o usuário reage diferente a cada uma.
-     */
     @Test
     void unresolvableToolReportsBackendUnavailableInsteadOfActionNotFound() {
         PendingAction action = register(input -> {
             executed.add(input);
             return "ok";
         });
-        currentCallback = null; // createDriver não está na lista de tools desta instância
+        currentCallback = null;
 
         ChatMessageDTO response = confirmationService.resolve(
                 new ConfirmRequestDTO("sessao-1", action.id(), true));
@@ -217,7 +197,6 @@ class ConfirmationServiceTest {
         assertThat(memory()).contains("indisponível");
     }
 
-    /** Retorno que não é JSON (as tools de vínculo devolvem frase) passa intacto. */
     @Test
     void plainTextResultIsKeptAsIs() {
         PendingAction action = register(input -> "Motorista X vinculado ao veículo Y com sucesso.");

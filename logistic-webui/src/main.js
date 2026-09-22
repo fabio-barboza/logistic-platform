@@ -3,11 +3,12 @@ import { marked } from 'marked'
 import Chart from 'chart.js/auto'
 import { handleCallback, login, logout, authenticatedFetch, currentUser, startIdleWatch } from './auth.js'
 
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api/chat'
+const API_URL = import.meta.env.VITE_API_URL
+if (!API_URL) {
+  throw new Error('VITE_API_URL não configurada — defina no .env da raiz.')
+}
 const HEALTH_URL = API_URL + '/health'
 const CONFIRM_URL = API_URL + '/confirm'
-// Um pouco acima do read timeout da LLM no agent (300s), para o erro do servidor chegar antes
-// de o cliente desistir. Sem isso o fetch fica pendurado indefinidamente.
 const REQUEST_TIMEOUT_MS = 310000
 const THEME_KEY = 'lp-theme'
 const SESSION_KEY = 'chat-session-id'
@@ -30,13 +31,6 @@ marked.setOptions({ breaks: true })
 Chart.defaults.font.family = getComputedStyle(document.documentElement)
     .getPropertyValue('--font-sans')
     .trim()
-
-/* ---------- Estado do agente ---------- */
-//
-// /api/chat/health é público (permitAll no SecurityConfig do agent) e fica fora do gate de
-// autenticação abaixo, de propósito: o indicador de status funciona mesmo no instante antes
-// do redirect para o login. checkAgent usa fetch puro, não authenticatedFetch — é a exceção
-// parcial da regra "todo acesso à rede passa por authenticatedFetch".
 
 const statusEl = document.getElementById('agent-status')
 
@@ -73,12 +67,6 @@ document.addEventListener('visibilitychange', () => {
     if (!document.hidden) checkAgent()
 })
 
-/* ---------- Autenticação (porta da frente) ---------- */
-//
-// Antes de qualquer render: resolve a sessão a partir do ?code= de retorno do Keycloak (ou
-// de uma sessão já existente no sessionStorage). Sem sessão utilizável, manda para o login e
-// não monta o resto da aplicação — tudo daqui para baixo vive dentro de init(), chamada só
-// depois desta checagem.
 let authenticated
 try {
     authenticated = await handleCallback()
@@ -95,8 +83,6 @@ if (!authenticated) {
 }
 
 function init() {
-
-/* ---------- Ícones ---------- */
 
 const ICONS = {
     truck: '<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/>',
@@ -117,8 +103,6 @@ const LOGO_SVG = `<svg viewBox="0 0 48 48" aria-hidden="true">
     <path fill="#221602" d="M20 8h-3V4H3c-1.1 0-2 .9-2 2v11h2c0 1.66 1.34 3 3 3s3-1.34 3-3h6c0 1.66 1.34 3 3 3s3-1.34 3-3h2v-5l-3-4zM6 18.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm13.5-9 1.96 2.5H17V9.5h2.5zm-1.5 9c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/>
   </g>
 </svg>`
-
-/* ---------- Tema ---------- */
 
 const themeBtn = document.getElementById('theme-toggle')
 
@@ -142,20 +126,12 @@ themeBtn.addEventListener('click', () => {
 
 syncThemeButton()
 
-/* ---------- Sessão ---------- */
-
 function generateSessionId() {
     return 'session-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9)
 }
 
-// Sessão nova a cada carregamento da página, de propósito. O histórico das mensagens vive só
-// no DOM e não sobrevive a um F5, mas a ChatMemory do agent é indexada pelo sessionId e
-// sobrevive. Reaproveitar o id do localStorage deixava o modelo enxergando uma conversa que o
-// usuário já não vê na tela — ele voltava a responder sobre o assunto anterior.
 let sessionId = generateSessionId()
 localStorage.setItem(SESSION_KEY, sessionId)
-
-/* ---------- Elementos ---------- */
 
 const chat = document.getElementById('chat')
 const input = document.getElementById('input')
@@ -165,15 +141,11 @@ const composer = document.getElementById('composer')
 const userNameEl = document.getElementById('user-name')
 const logoutBtn = document.getElementById('logout-btn')
 
-/* ---------- Usuário ---------- */
-
 const user = currentUser()
 if (user) {
     userNameEl.textContent = user.username ?? '—'
 }
 logoutBtn.addEventListener('click', logout)
-
-/* ---------- Mensagens ---------- */
 
 function scrollChat() {
     chat.scrollTop = chat.scrollHeight
@@ -228,9 +200,6 @@ function addAssistantMessage(content, renderData, pendingAction) {
     }
 
     if (renderData) {
-        // Os dados de render são montados pela LLM, então podem vir incompletos (dataset sem
-        // 'data', linha com menos colunas). Sem este guard, um TypeError aqui aborta o resto da
-        // renderização e a mensagem fica só com o texto, sem nenhum sinal do que houve.
         try {
             if (renderData.type === 'chart') {
                 bubble.appendChild(buildChart(renderData))
@@ -268,11 +237,6 @@ function addErrorMessage(text) {
     scrollChat()
 }
 
-/* ---------- Confirmação de escrita (human in the loop) ---------- */
-
-// A escrita já está registrada no agent quando este card aparece: os botões só decidem se ela
-// roda ou é descartada. Os argumentos vêm prontos do backend justamente para o que o usuário lê
-// aqui ser o que vai ser executado.
 function buildPendingAction(pending) {
     const card = document.createElement('div')
     card.className = pending.destructive ? 'confirm-card danger' : 'confirm-card'
@@ -299,7 +263,6 @@ function buildPendingAction(pending) {
 
     const confirmBtn = document.createElement('button')
     confirmBtn.type = 'button'
-    // Exclusão não tem desfazer: o botão diz o que faz, em vez de um "Confirmar" genérico.
     confirmBtn.className = pending.destructive ? 'confirm-btn danger' : 'confirm-btn primary'
     confirmBtn.textContent = pending.destructive ? 'Excluir' : 'Confirmar'
 
@@ -309,8 +272,6 @@ function buildPendingAction(pending) {
     cancelBtn.textContent = 'Cancelar'
 
     const decide = async approved => {
-        // Desabilita antes do await: dois cliques seriam duas execuções, e o store do agent
-        // consome a pendência uma vez só — o segundo clique viraria "ação não encontrada".
         confirmBtn.disabled = true
         cancelBtn.disabled = true
         const status = document.createElement('p')
@@ -351,8 +312,6 @@ function buildPendingAction(pending) {
     card.appendChild(actions)
     return card
 }
-
-/* ---------- Render de gráfico ---------- */
 
 const chartRegistry = []
 
@@ -448,8 +407,6 @@ function buildChart(data) {
     return wrapper
 }
 
-/* ---------- Render de tabela ---------- */
-
 function buildTable(data) {
     const wrapper = document.createElement('div')
     wrapper.className = 'table-card'
@@ -491,8 +448,6 @@ function buildTable(data) {
     return wrapper
 }
 
-/* ---------- Empty state ---------- */
-
 const SUGGESTIONS = [
     { icon: 'truck', text: 'Quantos motoristas existem?' },
     { icon: 'chart', text: 'Gráfico de pedidos por status' },
@@ -523,8 +478,6 @@ function renderEmptyState() {
         chip.addEventListener('click', () => sendText(chip.dataset.text))
     })
 }
-
-/* ---------- Envio ---------- */
 
 let sending = false
 

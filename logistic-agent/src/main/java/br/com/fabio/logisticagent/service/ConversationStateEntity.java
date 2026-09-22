@@ -7,7 +7,6 @@ import jakarta.persistence.Table;
 
 import java.time.Instant;
 
-/** Linha de {@code conversation_state}: o pedido de escrita ainda de pé numa conversa. */
 @Entity
 @Table(name = "conversation_state")
 class ConversationStateEntity {
@@ -19,7 +18,6 @@ class ConversationStateEntity {
     @Column(name = "write_intent", nullable = false)
     private boolean writeIntent;
 
-    /** Quem decide, na purga, se a conversa foi abandonada. */
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
