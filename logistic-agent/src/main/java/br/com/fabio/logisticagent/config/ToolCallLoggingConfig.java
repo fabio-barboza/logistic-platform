@@ -1,7 +1,7 @@
 package br.com.fabio.logisticagent.config;
 
-import br.com.fabio.logisticagent.tool.QueryResultHolder;
-import br.com.fabio.logisticagent.tool.ToolCallHolder;
+import br.com.fabio.logisticagent.core.agent.QueryResultHolder;
+import br.com.fabio.logisticagent.core.agent.ToolCallHolder;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationHandler;
 import org.slf4j.Logger;

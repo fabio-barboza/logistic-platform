@@ -1,5 +1,6 @@
 package br.com.fabio.logisticagent.config;
 
+import br.com.fabio.logisticagent.infra.gateway.ChatModelGatewayImpl;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.execution.ToolExecutionException;
@@ -20,7 +21,7 @@ class ChatClientConfigTest {
     void rethrowsWhenCauseCarriesPermissionDeniedMarker() {
         ToolExecutionException denied = new ToolExecutionException(tool("deleteDriver"),
                 new IllegalStateException("Error invoking method: deleteDriver\n"
-                        + ChatClientConfig.PERMISSION_DENIED_MARKER + ": requer a role \"write\""));
+                        + ChatModelGatewayImpl.PERMISSION_DENIED_MARKER + ": requer a role \"write\""));
 
         assertThatThrownBy(() -> processor.process(denied)).isSameAs(denied);
     }
