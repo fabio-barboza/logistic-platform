@@ -18,7 +18,7 @@ import java.util.Map;
 final class EvalAuthentication {
 
     private static final String TOKEN_URI = System.getProperty("eval.keycloak.token-uri",
-            "http://localhost:8090/realms/logistic/protocol/openid-connect/token");
+            "http://localhost:8091/realms/logistic/protocol/openid-connect/token");
     private static final String CLIENT_ID = "logistic-eval";
     private static final String CLIENT_SECRET = "logistic-eval-secret";
     private static final String USERNAME = "eval-user";

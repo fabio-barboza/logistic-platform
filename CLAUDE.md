@@ -11,7 +11,7 @@ Três apps independentes num só repo (não é multi-módulo Maven — cada um t
 | `logistic-webui/` | Vite 8, Chart.js 4, marked, JS puro (sem framework) | 5173 |
 | `logistic-agent/` | Java 21, Spring Boot 4.0.6, Spring AI 2.0.0 (MCP **client**) | 8080 |
 | `logistic-api/` | Java 21, Spring Boot 4.0.6, JPA, Flyway, MCP **server** | 8081 |
-| Keycloak (`quay.io/keycloak/keycloak:26.7`, realm `logistic`) | Autenticação/autorização OAuth2 | 8090 |
+| Keycloak (`quay.io/keycloak/keycloak:26.7`, realm `logistic`) | Autenticação/autorização OAuth2 | 8091 |
 
 Postgres 18 em 5432, via `docker-compose.yaml` na raiz (container `logisticdb`, serviço `postgres` sem profile — sobe por padrão).
 LLM OpenAI-compatível configurada via `LLM_BASE_URL`/`LLM_MODEL` no `.env` da raiz (gitignored, carregado pelo `start.sh`) — **sem default em `application.yml`** (`${LLM_BASE_URL}`/`${LLM_MODEL}`, sem fallback): faltando qualquer uma no `.env`, o boot quebra em vez de subir silenciosamente contra outro host/modelo. Mesma regra vale para `AGENT_DB_URL`/`AGENT_DB_USER`/`AGENT_DB_PASSWORD`, `API_DB_URL`/`API_DB_USER`/`API_DB_PASSWORD`, `API_READONLY_DB_USER`/`API_READONLY_DB_PASSWORD`, `LOGISTIC_API_URL`, `KEYCLOAK_ISSUER_URI`, `KEYCLOAK_AGENT_CLIENT_SECRET` e as `VITE_*` do webui — nenhuma tem default no código, só `.env.example` documenta valores de exemplo. Única exceção deliberada: o bloco Langfuse (`LANGFUSE_CLIENT_ENABLED` e as duas props OTLP que o Spring Boot resolve sempre, independente da flag) continua com default seguro — é o único jeito de manter a promessa de "desligado por padrão, zero config" da seção de Observabilidade abaixo. Rodar `mvnw` direto (fora do `start.sh`) sem essas vars no shell também quebra: exporte o `.env` você mesmo (`set -a && source .env && set +a`) antes.
@@ -45,11 +45,131 @@ cd logistic-webui && npm run dev | npm run build
 
 Testes da API rodam em H2 (`MODE=PostgreSQL`, perfil `test`) — não precisam de Docker. O schema vem do **Flyway rodando a própria `V1__init.sql`** (`target: 1`, porque a V2 cria role e dá GRANT, sintaxe que o H2 não tem), com `gen_random_uuid()` registrado via `flyway.init-sqls`. `ddl-auto: none` de propósito: tanto `create-drop` quanto `validate` fazem o Hibernate renderizar DDL, e o `H2Dialect` não tem nome de tipo para `NAMED_ENUM` (`SqlTypes code: 6001`), que é o mapeamento de `Route.status` e `Order.status`. O preço é não checar drift entidade x schema; em troca os testes rodam contra a migration real, e drift vira erro de SQL no teste de repositório. `@DataJpaTest` exige `@ActiveProfiles("test")`; testes de controller usam `@WebMvcTest` + `@MockitoBean` no service.
 
-Testes do agent também rodam em H2 (`MODE=PostgreSQL`, sem Docker): `ChatMemory`, `IPendingActionStore` e `IConversationStateStore` são tabelas, e o Flyway aplica a mesma `V1__agent_state.sql` da produção com `ddl-auto: validate`. Os stores usam Spring Data JPA e os testes deles são `@DataJpaTest`; `spring.test.database.replace: none` no perfil de teste é obrigatório, senão o slice troca o datasource por um H2 embutido e o `MODE=PostgreSQL` é ignorado.
+Testes do agent também rodam em H2 (`MODE=PostgreSQL`, sem Docker): `ChatMemory`, `PendingActionGateway` e `ConversationStateGateway` são tabelas, e o Flyway aplica a mesma `V1__agent_state.sql` da produção com `ddl-auto: validate`. Os stores usam Spring Data JPA e os testes deles são `@DataJpaTest`; `spring.test.database.replace: none` no perfil de teste é obrigatório, senão o slice troca o datasource por um H2 embutido e o `MODE=PostgreSQL` é ignorado.
 
 Logs de cada app vão para `logs/logistic-{api,agent,webui}.log` — o terminal do `start.sh` só mostra progresso. Para diagnosticar subida, é `tail` nesses arquivos.
 
 ## Arquitetura
+
+### Convenções de pacote (Clean Architecture)
+
+Valem para os dois backends Java. Estado da migração: `logistic-agent` migrado (árvore e exceções abaixo); `logistic-api`
+ainda na organização antiga (`controller/`, `service/`, `repository/`, `mcp/`). Pragmatismo acima de
+pureza: exceção é aceitável quando evitá-la custa abstração sem ganho — **desde que documentada aqui**.
+
+Raízes por backend:
+
+- `core/` — o que o sistema faz, sem saber de onde vem nem para onde vai.
+  - `domain/` — **só o modelo**: records, enums, `exception/` e subpastas de modelo (ex.: `chat/`).
+  - `usecase/<domínio>/` — um caso de uso por classe, `@Service`, sem interface.
+  - `gateway/` — uma interface por agregado para tudo que é externo (banco, APIs, LLM, storage).
+  - `service/` — etapa que mais de um use case compartilha.
+  - `settings/` — records de configuração que o core recebe.
+  - `support/` — utilitário técnico puro.
+  - Pastas de conceito de primeira classe do projeto, quando existirem (ex.: `guardrail/`, `agent/tools/`).
+- `infra/` — como o core fala com o mundo.
+  - `gateway/` — `*GatewayImpl`, uma por interface de `core/gateway`.
+  - `repository/` — só repositories Spring Data.
+  - `entity/` — `*Entity`.
+  - `dto/` — `*Dto`: resultado de query `select new`.
+  - `mapper/` — todos os mappers do infra.
+  - `support/` — helpers técnicos (ex.: SQL).
+  - `client/` — clientes externos (ex.: S3, HTTP).
+- `entrypoint/` — quem chama o core.
+  - `controller/` — só controllers; declaram só o status de sucesso.
+  - `exception/` — `ApiExceptionHandler`, **único** que traduz erro em status HTTP.
+  - `request/`, `response/`, `mapper/`.
+  - Outros entrypoints lado a lado (ex.: `mcp/`, `sse/`).
+- `config/` — todo `@Configuration` e propriedades tipadas; é quem liga as camadas.
+- Módulos de feature transversais, na raiz, ao lado de `config/`. **Exceção documentada:** são coesos e
+  atravessam as camadas; dividi-los espalharia a feature e criaria arquivos sem ganho.
+  - `security/` (agent) — `AuthenticatedUser`, `TokenExchangeService`: autenticação e troca de token.
+    Quem usa é o `entrypoint` (o controller deriva o `conversationId`) e o `config`; o `core` não importa.
+
+Regras:
+
+- Pasta com o nome do que contém; subpastas "de apoio" viram irmãs (`request/` ao lado de
+  `controller/`, não dentro).
+- `domain/` é só o modelo. Classe que injeta gateway não é domínio: vai para `service/` ou para a pasta
+  de conceito dela.
+- `core` não importa `infra`, `entrypoint`, `config` nem os módulos de feature. Do Spring, só
+  estereótipos e transação. JPA, clientes HTTP e SDKs de LLM ficam no `infra`.
+- Quem chama quem: controller → use case → gateway. Use case nunca chama outro use case; tool de agente
+  também não (ela é o "use case do agente" e chama gateway). Etapa compartilhada vai para `core/service/`.
+- Onde vive uma tool: pergunte "quem chama?". Cliente externo (ex.: servidor MCP) → ela é entrypoint e
+  chama use case, como um controller. Laço do próprio agente → fica no core e chama gateway. Tool que só
+  repassa para outra API → a chamada da API é um gateway.
+- Nada de interface só por padrão: só gateways, repositories Spring Data (o Spring gera a impl) e tipos
+  do modelo com motivo (sealed, callback). Query dinâmica demais para `@Query` vira classe `@Repository`
+  sem interface, sem fragment `*RepositoryCustom`. HQL aceita limit/offset no `@Query`.
+- Sufixos, nunca prefixos (nada de `I*`): `*UseCase`, `*Gateway`/`*GatewayImpl`, `*Entity`, `*Dto`,
+  `*Request`/`*Response`, `*Mapper`. Uma classe só leva "Gateway" no nome se implementa uma interface
+  de `core/gateway`.
+- Testes espelham o pacote do que testam.
+- **Mover classe de pacote:** IDE e `sed` não atualizam o nome totalmente qualificado dentro de string
+  JPQL (`select new br.com...Dto(...)`) — o contexto do Spring não sobe. Depois de mudar pacote, procure
+  `select new`, e também FQN em `META-INF/spring.factories` e em `logging.level` do `application.yml`.
+
+Árvore do `logistic-agent` (`br.com.fabio.logisticagent`), no formato do `resume-ai`:
+
+```
+config/                 ChatClientConfig, SecurityConfig, CorsConfig, LangfuseObservabilityConfig,
+                        McpAuthPropagationConfig, ToolCallLoggingConfig, StatePurgeConfig,
+                        McpServerUnavailableFailureAnalyzer
+core/
+  agent/                RenderHolder, ToolCallHolder, QueryResultHolder, PendingActionHolder
+                        (estado request-scoped do laço), ActionLabels (textos PT das tools de escrita)
+  agent/tools/          RenderTool (tool local: quem chama é o laço do agente)
+  domain/chat/          ChatMessage, PendingAction
+  domain/render/        RenderableContent (sealed), ChartContent, TableContent, Dataset
+  domain/exception/     PermissionDeniedException
+  gateway/              ChatModelGateway, ChatHistoryGateway, McpToolGateway, PendingActionGateway,
+                        ConversationStateGateway, TracingGateway, BackendHealthGateway
+  guardrail/            WriteConfirmationGuardrail, RequiredArgumentsCheck, DeletionTargetLookup (escrita
+                        vira pendência, ou é barrada antes do card), UnbackedClaimGuardrail (afirmação
+                        sem tool por trás) e AnswerNotices (avisos anexados à resposta)
+  settings/             StatePurgeSettings
+  usecase/chat/         SendMessageUseCase, ConfirmActionUseCase
+  usecase/health/       CheckHealthUseCase
+  usecase/maintenance/  PurgeAgentStateUseCase
+infra/
+  client/               ConfirmingToolCallbackProvider (adapta as tools MCP do Spring AI ao guardrail)
+  entity/               ConversationStateEntity, PendingActionEntity
+  gateway/              *GatewayImpl, uma por interface de core/gateway
+  mapper/               PendingActionEntityMapper
+  repository/           ConversationStateRepository, PendingActionRepository
+  support/              DetailsJsonConverter
+entrypoint/
+  controller/           ChatController
+  mapper/               ResponseMapper
+  request/              ChatRequest, ConfirmRequest
+  response/             ChatResponse, PendingActionResponse, HealthResponse
+  scheduler/            AgentStatePurgeScheduler
+security/               AuthenticatedUser, TokenExchangeService
+```
+
+O human-in-the-loop não é mais um pacote próprio: a pendência é modelo (`PendingAction`) + gateway
+(`PendingActionGateway`), as regras são guardrails, a interceptação das tools MCP é adaptador do Spring AI
+(`infra/client`) e a confirmação é um use case (`ConfirmActionUseCase`) chamado pelo controller.
+
+Exceções documentadas no `logistic-agent`:
+
+- **Anotações de framework no core:** `@RequestScope` nos holders de `core/agent` e `@Tool`/`@ToolParam`
+  do Spring AI na `RenderTool` — a descrição da tool é prompt e precisa estar na própria classe (mesma
+  exceção do `ResumeTools` no resume-ai).
+- **`RenderableContent` carrega `@JsonTypeInfo`/`@JsonSubTypes`** e o `ChatResponse` o reaproveita em vez
+  de ter uma cópia em `response/`: o `type` é o contrato que o `main.js` despacha, e a cópia só duplicaria
+  os quatro records.
+- **`ConfirmingToolCallbackProvider` fica em `infra/client` sem ser `*GatewayImpl`:** ele não implementa
+  gateway nenhum — é o decorator que o `ChatClientConfig` põe em volta do `ToolCallbackProvider` do MCP.
+  Só adapta tipos do Spring AI: as regras (o que é escrita, uma por resposta, teto de recusas) estão no
+  `WriteConfirmationGuardrail`. Ele lê o `SecurityContext` para filtrar tools por role (UX, não
+  autorização — ver *Segurança*).
+- **Holders request-scoped como canal entre `infra` e `core`.** O `ToolCallLoggingConfig` e o
+  `ConfirmingToolCallbackProvider` escrevem nos holders de `core/agent`, e o `SendMessageUseCase` lê
+  depois da chamada ao modelo. O desenho estrito devolveria tudo isso no retorno do `ChatModelGateway`
+  (texto + tools chamadas + render + pendência); fica para quando o fluxo do chat for mexido com o eval
+  rodando.
 
 ### logistic-api — dono do domínio
 
@@ -67,39 +187,37 @@ Camadas: `controller/` (REST) e `mcp/` (tools) são **dois adaptadores sobre o m
 
 ### logistic-agent — ponte LLM ↔ MCP
 
-- `ChatClientConfig`: monta o `ChatClient` com o system prompt (em PT-BR, contém a regra de leitura só por `executeQuery` e a tradução de status para o usuário), os tool callbacks MCP descobertos da API, o `RenderTool` local e `MessageChatMemoryAdvisor` (janela de 20 mensagens). A `ChatMemory` é `JdbcChatMemoryRepository` (auto-configurado pelo starter `spring-ai-starter-model-chat-memory-repository-jdbc`) sobre o `agentdb`; `AgentStatePurge` apaga conversa sem mensagem há 24h, porque o `sessionId` novo a cada F5 deixaria a tabela crescendo para sempre.
+- `ChatClientConfig`: monta o `ChatClient`; o system prompt mora em `src/main/resources/prompts/system_prompt.md` e é carregado pelo `ChatModelGatewayImpl` (em PT-BR, contém a regra de leitura só por `executeQuery` e a tradução de status para o usuário), os tool callbacks MCP descobertos da API (embrulhados pelo `ConfirmingToolCallbackProvider`) e `MessageChatMemoryAdvisor` (janela de 20 mensagens); o `RenderTool` local entra por chamada, no `ChatModelGatewayImpl`. A `ChatMemory` é `JdbcChatMemoryRepository` (auto-configurado pelo starter `spring-ai-starter-model-chat-memory-repository-jdbc`) sobre o `agentdb`; `PurgeAgentStateUseCase` apaga conversa sem mensagem há 24h, porque o `sessionId` novo a cada F5 deixaria a tabela crescendo para sempre.
 - **A tabela `spring_ai_chat_memory` é criada pela `V1__agent_state.sql`, não pelo inicializador do Spring AI.** O `schema-postgresql.sql` do `spring-ai-model-chat-memory-repository-jdbc` dimensiona `conversation_id` como `varchar(36)` (assume UUID) e a chave daqui é `sub|sessionId`, ~70 caracteres — sem isso todo INSERT de mensagem morre com `value too long for type character varying(36)`. Um `ALTER` na migration não resolve: o Flyway roda **antes** do inicializador do Spring AI, então a tabela ainda não existe (`relation "spring_ai_chat_memory" does not exist`, boot derrubado). É a mesma ordem que faz a migration ganhar — o `CREATE TABLE IF NOT EXISTS` dele vira no-op, e `initialize-schema: always` fica como rede para tabela nova de um upgrade. O preço é drift: `ChatMemorySchemaTest` lê o script de dentro do jar e quebra quando ele muda.
-- **SQL escrito à mão no agent tem que ser rodado contra o Postgres, não só contra o H2 dos testes.** O upsert de `conversation_state` usa `MERGE` (o H2 não reconhece `ON CONFLICT ... DO UPDATE`) com `CAST(:param AS tipo)` em cada parâmetro do `USING (VALUES ...)`: dentro do `VALUES` de subquery o Postgres não tem coluna de destino de onde inferir o tipo e assume `text` (`column "write_intent" is of type boolean but expression is of type text`), enquanto o H2 infere sozinho e passa verde. Mesma armadilha do `CAST(:param AS tipo)` das buscas da API, e como o teste de contrato dos stores roda em H2, nenhum teste daqui pega essa divergência.
+- **SQL escrito à mão no agent tem que ser rodado contra o Postgres, não só contra o H2 dos testes.** Hoje o estado de conversa é JPA puro (`findById`/`save` no `ConversationStateGatewayImpl`) e o único SQL nativo é o `DELETE` sobre `spring_ai_chat_memory` no `ChatHistoryGatewayImpl` (chamado pelo `PurgeAgentStateUseCase`). A armadilha que motivou a regra: um upsert à mão com `MERGE ... USING (VALUES ...)` passava no H2 e quebrava no Postgres (`column "write_intent" is of type boolean but expression is of type text`), porque dentro do `VALUES` de subquery o Postgres não infere o tipo e assume `text` — exige `CAST(:param AS tipo)` em cada parâmetro, a mesma armadilha das buscas da API. Os testes de contrato dos stores rodam em H2 e não pegam essa divergência.
 - Reasoning desligado (`spring.ai.openai.chat.options.extra-body` → `chat_template_kwargs.enable_thinking=false`): o `llama-server` sobe com `--jinja` e o template do Qwen3.6 liga o thinking por padrão, gastando centenas de tokens de `<think>` por chamada — e são 2+ chamadas por pergunta (uma por rodada de tool). As chaves vão entre colchetes no YAML para o binder não normalizar o underscore; `ChatOptionsBindingTest` guarda isso, porque a falha é silenciosa (o servidor ignora chave desconhecida e o thinking volta).
 - Timeout da LLM (`llmTimeoutCustomizer`, 300s de read): a chamada **não é streaming**, então a LLM local não devolve byte nenhum até terminar de gerar — o read timeout tem que cobrir a geração inteira. Curto demais e o okhttp fecha o socket no meio (`SocketException: Socket closed`), e o chat mostra "erro ao processar". O webui aborta em 310s (`REQUEST_TIMEOUT_MS`), logo acima — mudou um, mude o outro.
-- Padrão de render: `RenderTool.renderChart/renderTable` não devolvem dados ao modelo — gravam num `RenderHolder` **request-scoped**, e o `ChatService` lê o holder depois da chamada ao `ChatClient`, devolvendo `{ content, renderData }`. Alterar o escopo do holder vaza render entre requisições concorrentes.
-- `RenderTool` valida os argumentos do modelo (labels/datasets/columns/rows não vazios, e `data.size() == labels.size()`, `row.size() == columns.size()`) e devolve a crítica como **retorno da tool**, sem gravar no holder — o modelo lê e refaz a chamada. Retorno de tool é feedback, não log: uma tool que diz "preparado" para argumentos quebrados faz o modelo afirmar ao usuário que o gráfico ficou pronto. A crítica também fica no `RenderHolder` (`registerRejection`), e o `ChatService` anexa um aviso ao texto quando a resposta sai sem `renderData` depois de uma recusa — o modelo às vezes ignora a crítica e anuncia o gráfico mesmo assim, e o prompt sozinho não garante o contrário. Uma chamada bem-sucedida limpa o erro. O `main.js` ainda envolve o dispatch de `renderData` em try/catch, porque os dados vêm da LLM.
-- Render só quando o usuário pede (`ChatService.VISUAL_REQUEST` → `RenderHolder.setRenderAllowed`, checado em `RenderTool.policyRefusal`): a tool não vê a pergunta, então quem decide é o `ChatService` a partir da mensagem. Sem isso o modelo desenhava gráfico por conta própria numa pergunta analítica ("qual a taxa de falha por estado?") — texto é o padrão e o prompt manda **oferecer** a visualização. Com render bloqueado o retry corretivo também não roda, senão a própria oferta ("posso mostrar em gráfico") disparava um round-trip extra. Palavra nova no regex = caso novo no `tool-selection.json`; os follow-ups ("refaça em barras", "transforme isso num gráfico") só passam porque o termo aparece na mensagem. O "sim" à oferta não traz termo nenhum, então o `ChatService` guarda a oferta pendente por conversa (`IConversationStateStore.rememberVisualOffer`, gravada quando a resposta menciona visualização sem desenhar) e a consome no aceite (`AFFIRMATIVE`), uma vez só. E as recusas de política **cedem no teto** (`RenderTool.yielding`): a segunda chamada insistente passa e desenha. Sem isso o modelo determinístico reenvia a mesma chamada para sempre — o bloqueio sozinho rodou 182 recusas idênticas numa pergunta real, mesma armadilha da recusa por argumento inválido: só retorno de sucesso encerra o loop de tool calls.
+- Padrão de render: `RenderTool.renderChart/renderTable` não devolvem dados ao modelo — gravam num `RenderHolder` **request-scoped**, e o `SendMessageUseCase` lê o holder depois da chamada à LLM (`ChatModelGateway`), devolvendo `{ content, renderData }`. Alterar o escopo do holder vaza render entre requisições concorrentes.
+- `RenderTool` não recebe dados do modelo, só **nomes de coluna**: o `ToolCallLoggingConfig` guarda o resultado de cada `executeQuery` no `QueryResultHolder` (request-scoped), e `renderChart(title, chartType, labelColumn, valueColumn, seriesLabel)` / `renderTable(title, columns)` montam o conteúdo a partir dessas linhas. Isso tira do modelo a transcrição dos dados, que era onde ele errava (tamanhos divergentes entre labels e data, células faltando). Sem consulta no turno, `chartType` inválido ou coluna inexistente, a tool devolve a crítica como **retorno da tool** — listando as colunas disponíveis — e não grava no holder; o modelo lê e refaz a chamada. Retorno de tool é feedback, não log: uma tool que diz "preparado" para argumentos quebrados faz o modelo afirmar ao usuário que o gráfico ficou pronto. **Não há teto de recusas no render hoje.** A versão anterior, que recebia os dados, tinha (`MAX_REJECTIONS`) porque com temperatura baixa o modelo reenvia a **mesma** chamada e o loop de tool calls do Spring AI 2.0 não tem limite de rodadas: uma requisição do eval (temperatura 0) rodou 172 recusas idênticas em 26 minutos até estourar o contexto de 260k. Só retorno de sucesso encerra o loop — mensagem pedindo para o modelo parar não garante nada com modelo determinístico. O espaço de erro agora é pequeno (nome de coluna e `chartType`), mas se o loop reaparecer, o teto volta aqui. O `main.js` ainda envolve o dispatch de `renderData` em try/catch.
 - Tradução de status no render (`RenderTool.STATUS_PT`): as células de `renderTable` e os rótulos de `renderChart` passam por um mapa EN→PT antes de ir para o holder. O modelo traduzia o texto da resposta e copiava o enum cru para o payload, então a tela mostrava "Entregue" no parágrafo e "DELIVERED" na tabela. Tradução de enum é determinística — é código, não instrução; o prompt guarda só a tradução do texto e avisa que nos argumentos de render o enum pode ir cru. Enum novo = entrada nova no mapa, no system prompt e no `SchemaMcpTools`.
-- Tabela markdown duplicada (`ChatService.withoutDuplicatedTable`): com `renderData` na resposta, as linhas `| ... |` do texto são removidas — o modelo repetia no markdown os mesmos dados do gráfico, e o prompt sozinho não segurava.
-- Uma visualização por resposta (`RenderTool`): a segunda chamada de render na mesma requisição é recusada. O `RenderHolder` guarda um conteúdo só, então uma segunda chamada bem-sucedida sobrescrevia a primeira em silêncio — o modelo desenhava tabela *e* gráfico para "taxa de falha por estado", o usuário via só a última e o texto anunciava as duas. Render sem pedido explícito também saiu do prompt e das descrições das tools: texto é o padrão, e visualização só quando o usuário pede (ou quando ele aceita a oferta).
-- Dado inventado sem tool (`ToolCallHolder` + `ChatService.answeredWithoutData`): resposta com dígito, nenhuma tool chamada no turno e nenhum render produzido → refaz com instrução corretiva, até duas vezes. O `ToolCallHolder` é request-scoped e é alimentado pelo `ToolCallLoggingConfig`, que já interceptava toda tool call para o log. Existe porque **fora do primeiro turno da sessão o modelo responde de memória**: "e em MG?" depois de "pedidos entregues em SP" devolveu 106 onde havia 423, e uma listagem de MG com cidade de SP dentro — log de tool calls vazio nos dois. O system prompt já proíbe isso explicitamente e o modelo ignora; o gatilho aqui não é heurística sobre a pergunta, é fato binário do turno. As três condições importam: sem o teste de dígito, recusa ("não suportamos exclusão") e saudação disparariam; sem o teste de render, "transforme isso num gráfico" — que legitimamente reaproveita dados do turno anterior — disparava. Numa rodada completa do eval não disparou nenhuma vez: custo zero quando o modelo se comporta.
-- Retry corretivo (`ChatService`): se a resposta menciona gráfico/tabela/pizza e o `RenderHolder` está vazio, o `ChatService` refaz a chamada ao `ChatClient` com uma instrução corretiva (mesma sessão, então o modelo mantém o contexto) e devolve o resultado dela — até **duas** tentativas, a segunda mais dura (a primeira, branda, recupera a maior parte, mas não todas). Existe porque o modelo às vezes responde "aqui está o gráfico de pizza" sem chamar tool nenhuma — nem a de busca, nem a de render — e o log de tool calls fica vazio naquele turno. Custa um round-trip a mais só no caminho de falha.
-- Teto de recusas de render (`MAX_REJECTIONS = 2`, contado no `RenderHolder` por requisição): a crítica devolvida pela tool é o que faz o modelo se corrigir, mas com temperatura baixa ele reenvia a **mesma** chamada, e o loop de tool calls do Spring AI 2.0 não tem limite de rodadas — uma requisição do eval (temperatura 0) rodou 172 recusas idênticas em 26 minutos até estourar o contexto de 260k. Na última tentativa a tool para de pedir correção e **desenha assim mesmo**: gráfico truncado no menor tamanho comum entre labels e data, tabela com linhas cortadas ou completadas com `-`. Encerrar o loop tem que vir de um retorno de sucesso — mensagem pedindo para o modelo parar não garante nada com modelo determinístico. O retorno manda avisar o usuário de que a visualização saiu parcial.
+- Tabela markdown duplicada (`AnswerNotices.withoutDuplicatedTable`): com `renderData` na resposta, as linhas `| ... |` do texto são removidas — o modelo repetia no markdown os mesmos dados do gráfico, e o prompt sozinho não segurava.
+- Uma visualização por resposta: **só pela descrição das tools** ("cada resposta desenha no máximo uma visualização"), não em código. O `RenderHolder` guarda um conteúdo só, então uma segunda chamada bem-sucedida sobrescreve a primeira — o usuário vê a última.
+- Dado inventado sem tool (`ToolCallHolder` + `SendMessageUseCase.answeredWithoutData`): resposta com dígito, nenhuma tool chamada no turno e nenhum render produzido → refaz com instrução corretiva, até duas vezes. O `ToolCallHolder` é request-scoped e é alimentado pelo `ToolCallLoggingConfig`, que já interceptava toda tool call para o log. Existe porque **fora do primeiro turno da sessão o modelo responde de memória**: "e em MG?" depois de "pedidos entregues em SP" devolveu 106 onde havia 423, e uma listagem de MG com cidade de SP dentro — log de tool calls vazio nos dois. O system prompt já proíbe isso explicitamente e o modelo ignora; o gatilho aqui não é heurística sobre a pergunta, é fato binário do turno. As três condições importam: sem o teste de dígito, recusa ("não suportamos exclusão") e saudação disparariam; sem o teste de render, "transforme isso num gráfico" — que legitimamente reaproveita dados do turno anterior — disparava. Numa rodada completa do eval não disparou nenhuma vez: custo zero quando o modelo se comporta.
+- Retry corretivo (`SendMessageUseCase`): se a resposta menciona gráfico/tabela/pizza e o `RenderHolder` está vazio, o `SendMessageUseCase` refaz a chamada à LLM com uma instrução corretiva (mesma sessão, então o modelo mantém o contexto) e devolve o resultado dela — até **duas** tentativas, a segunda mais dura (a primeira, branda, recupera a maior parte, mas não todas). Existe porque o modelo às vezes responde "aqui está o gráfico de pizza" sem chamar tool nenhuma — nem a de busca, nem a de render — e o log de tool calls fica vazio naquele turno. Custa um round-trip a mais só no caminho de falha.
 - `ToolCallLoggingConfig`: loga toda tool call (nome, args, retorno truncado) via `ObservationHandler`. É o que distingue "a tool falhou" de "o modelo disse que fez sem chamar a tool" — sem isso as duas viram a mesma frase na tela. Independente do Langfuse, que é opcional.
-- **Escrita passa por confirmação do usuário** (`confirm/ConfirmingToolCallbackProvider`): o decorator embrulha as tools MCP e as de escrita **não executam** quando o modelo chama — elas registram uma `PendingAction` (holder request-scoped só para a resposta do turno atual + `IPendingActionStore` persistido, tabela `pending_action` no `agentdb`) e devolvem "aguardando confirmação". O `ChatService` põe a pendência no `ChatMessageDTO`, o webui desenha o card com Confirmar/Cancelar, e o `POST /api/chat/confirm` executa o `ToolCallback` original **sem passar pela LLM**, com o JSON de argumentos registrado — resolvido por **nome** contra o provider MCP cru, não guardado como referência viva na pendência (não sobreviveria numa linha de banco). Detalhes que não são acessórios:
+- **Escrita passa por confirmação do usuário** (`infra/client/ConfirmingToolCallbackProvider` + as regras no `core/guardrail/WriteConfirmationGuardrail`): o decorator embrulha as tools MCP e as de escrita **não executam** quando o modelo chama — elas registram uma `PendingAction` (holder request-scoped só para a resposta do turno atual + `PendingActionGateway` persistido, tabela `pending_action` no `agentdb`) e devolvem "aguardando confirmação". O `SendMessageUseCase` põe a pendência no `ChatMessage`, o webui desenha o card com Confirmar/Cancelar, e o `POST /api/chat/confirm` (`ConfirmActionUseCase`) executa a tool original **sem passar pela LLM**, com o JSON de argumentos registrado — resolvida por **nome** pelo `McpToolGateway`, contra o provider MCP cru, não guardado como referência viva na pendência (não sobreviveria numa linha de banco). Detalhes que não são acessórios:
   - A lista é **por exclusão**: leitura é `executeQuery` e `describeSchema`, o resto é escrita. Tool nova nasce confirmada; o inverso deixaria uma tool nova gravando sozinha até alguém lembrar de atualizar a classe.
   - **Campo obrigatório faltando não vira pendência** (`RequiredArgumentsCheck`): a lista de obrigatórios sai do `required` do próprio `inputSchema` da tool, então tool nova é coberta sozinha — nada é declarado no agent. Valor de "não sei" preenchido pelo modelo (`N/A`, `-`, `null`, `não informado`) conta como ausência, senão vira texto literal no banco. As descrições das tools de escrita na API listam os obrigatórios e mandam perguntar antes de chamar — descrição é prompt, e é ela que evita o round-trip da recusa. Deixar a API recusar não serve: ela recusa **depois** da confirmação, e o usuário já teria clicado em confirmar num card com "Nome: -". O que isso *não* pega é o valor **inventado** (`joao@email.com` para "cadastre o motorista João") — nenhum schema distingue isso de dado real; quem pega é o próprio card, que mostra cada valor antes de gravar.
-  - **Replay literal.** Nunca peça ao modelo para refazer a chamada depois do "sim": com o payload reescrito, o usuário confirma uma coisa e outra é gravada. Pela mesma razão a frase do card é montada em código (`PendingActionMapper`), não pedida à LLM.
-  - **Ação anunciada sem tool chamada** (`ChatService.ACTION_CLAIM` + `ACTION_CORRECTIONS`): resposta que afirma "aguardando sua confirmação" — ou que dá a gravação por feita ("cadastrado com sucesso", "cadastrei") — com o `PendingActionHolder` vazio dispara retry corretivo, até duas vezes, e no fim a tela desmente (`withUnregisteredActionNotice`). Mesma patologia do "aqui está o gráfico" sem `renderChart`, e aconteceu no primeiro teste real: "Adicione um novo motorista João Ribeiro" + os dados no turno seguinte, log de tool calls **vazio** nos dois turnos, e a tela com a frase de confirmação sem botão nenhum. O `answeredWithoutData` não pega esse caso porque a frase não tem dígito. A parte de "aguardando confirmação" é restrita a frases que afirmam a **existência** da pendência ("preciso do e-mail para registrar a ação" é o modelo pedindo dado e não pode virar retry); a de conclusão exige o marcador de sucesso, porque "o motorista foi cadastrado em 12/03/2024" é leitura legítima de `created_at`.
-  - **Pedido de escrita que não virou pendência** (`ChatService.WRITE_REQUEST` + `writeWentNowhere`): o gatilho aqui **não é a frase do modelo**, é o pedido do usuário (regex sobre a mensagem, como o `VISUAL_REQUEST`) mais a ausência de pendência no fim do turno. Nasceu do usuário sem a role `write`: sem as tools de escrita na lista, o modelo tenta contornar por `executeQuery` (o `INSERT` morre na role read-only) e anuncia sucesso — e em três execuções da **mesma** pergunta ele disse "cadastrado com sucesso", "a ação foi registrada" e "será cadastrado assim que você confirmar na tela". Perseguir frase não fecha isso; o que fecha é o fato. O aceite curto ("sim, pode cadastrar", ou só "sim") mantém o pedido de pé por conversa (`IConversationStateStore.setWriteIntent`, mesma tabela e mesmo motivo do `rememberVisualOffer` acima) — é justamente no turno do aceite que o modelo dá por feito. Duas saídas para não gastar o aviso à toa: resposta terminada em `?` (falta dado, fluxo aberto) e `DENIAL` (a resposta já diz que não deu). O `DENIAL` é **supressão, não detecção**: se ele falhar, sobra um aviso redundante; nunca esconde mentira, porque o `ACTION_CLAIM` é avaliado antes e tem precedência.
-  - **Nada verificado, depois das correções** (`withUnverifiedAnswerNotice`): quando o `answeredWithoutData` continua valendo depois dos dois retries, o número inventado ia para a tela sem ressalva nenhuma. Agora a tela diz que nenhuma tool foi chamada. Os três avisos são exclusivos entre si, do mais específico para o mais genérico — dois "isso não aconteceu" na mesma resposta viram ruído, e ruído faz o usuário parar de ler o aviso que importa.
-  - **O aviso de "nada foi gravado ainda" é incondicional** (`ChatService.withPendingActionNotice`) enquanto houver pendência. O modelo escreve "cadastrado com sucesso" diante de qualquer retorno positivo, e procurar essa afirmação na resposta é heurística perdida — há infinitas formas de dizer que fez.
-  - **Uma escrita por resposta.** A segunda chamada de escrita é recusada; a repetição da **mesma** chamada devolve a **mesma** pendência, com cara de sucesso. É o retorno de sucesso que encerra o loop de tool calls (a armadilha das 182 recusas do render), e aqui não dá para "ceder e executar" no teto — ceder é o que a confirmação existe para impedir.
-  - O desfecho (confirmado/cancelado/falhou) entra na `ChatMemory` da sessão, porque o modelo não participa desse passo e sem isso o turno seguinte responderia sobre uma ação eternamente pendente. O `IPendingActionStore` consome a pendência **uma vez** (dois cliques = duas escritas, e nenhuma tool da API é idempotente), com TTL de 15min. Não há teto de pendências vivas: quem limita é o TTL mais a purga agendada (`AgentStatePurge`).
+  - **Replay literal.** Nunca peça ao modelo para refazer a chamada depois do "sim": com o payload reescrito, o usuário confirma uma coisa e outra é gravada. Pela mesma razão a frase do card é montada em código (`ActionLabels`), não pedida à LLM.
+  - **Ação anunciada sem tool chamada** (`UnbackedClaimGuardrail.claimsAction` + `ACTION_CORRECTIONS`): resposta que afirma "aguardando sua confirmação" — ou que dá a gravação por feita ("cadastrado com sucesso", "cadastrei") — com o `PendingActionHolder` vazio dispara retry corretivo, até duas vezes, e no fim a tela desmente (`AnswerNotices.withUnregisteredActionNotice`). Mesma patologia do "aqui está o gráfico" sem `renderChart`, e aconteceu no primeiro teste real: "Adicione um novo motorista João Ribeiro" + os dados no turno seguinte, log de tool calls **vazio** nos dois turnos, e a tela com a frase de confirmação sem botão nenhum. O `answeredWithoutData` não pega esse caso porque a frase não tem dígito. A parte de "aguardando confirmação" é restrita a frases que afirmam a **existência** da pendência ("preciso do e-mail para registrar a ação" é o modelo pedindo dado e não pode virar retry); a de conclusão exige o marcador de sucesso, porque "o motorista foi cadastrado em 12/03/2024" é leitura legítima de `created_at`.
+  - **Pedido de escrita que não virou pendência** (`UnbackedClaimGuardrail.isWriteRequest` + `SendMessageUseCase.writeWentNowhere`): o gatilho aqui **não é a frase do modelo**, é o pedido do usuário (regex sobre a mensagem) mais a ausência de pendência no fim do turno. Nasceu do usuário sem a role `write`: sem as tools de escrita na lista, o modelo tenta contornar por `executeQuery` (o `INSERT` morre na role read-only) e anuncia sucesso — e em três execuções da **mesma** pergunta ele disse "cadastrado com sucesso", "a ação foi registrada" e "será cadastrado assim que você confirmar na tela". Perseguir frase não fecha isso; o que fecha é o fato. O aceite curto ("sim, pode cadastrar", ou só "sim") mantém o pedido de pé por conversa (`ConversationStateGateway.setWriteIntent`, tabela `conversation_state`) — é justamente no turno do aceite que o modelo dá por feito. Duas saídas para não gastar o aviso à toa: resposta terminada em `?` (falta dado, fluxo aberto) e `DENIAL` (a resposta já diz que não deu). O `DENIAL` é **supressão, não detecção**: se ele falhar, sobra um aviso redundante; nunca esconde mentira, porque o `ACTION_CLAIM` é avaliado antes e tem precedência.
+  - **Nada verificado, depois das correções** (`AnswerNotices.withUnverifiedAnswerNotice`): quando o `answeredWithoutData` continua valendo depois dos dois retries, o número inventado ia para a tela sem ressalva nenhuma. Agora a tela diz que nenhuma tool foi chamada. Os três avisos são exclusivos entre si, do mais específico para o mais genérico — dois "isso não aconteceu" na mesma resposta viram ruído, e ruído faz o usuário parar de ler o aviso que importa.
+  - **O aviso de "nada foi gravado ainda" é incondicional** (`AnswerNotices.withPendingActionNotice`) enquanto houver pendência. O modelo escreve "cadastrado com sucesso" diante de qualquer retorno positivo, e procurar essa afirmação na resposta é heurística perdida — há infinitas formas de dizer que fez.
+  - **Uma escrita por resposta.** A segunda chamada de escrita é recusada; a repetição da **mesma** chamada devolve a **mesma** pendência, com cara de sucesso. É o retorno de sucesso que encerra o loop de tool calls (a armadilha das 172 recusas do render, no parágrafo do `RenderTool`), e aqui não dá para "ceder e executar" no teto — ceder é o que a confirmação existe para impedir.
+  - O desfecho (confirmado/cancelado/falhou) entra na `ChatMemory` da sessão (via `ChatHistoryGateway`), porque o modelo não participa desse passo e sem isso o turno seguinte responderia sobre uma ação eternamente pendente. O `PendingActionGateway` consome a pendência **uma vez** (dois cliques = duas escritas, e nenhuma tool da API é idempotente), com TTL de 15min. Não há teto de pendências vivas: quem limita é o TTL mais a purga agendada (`PurgeAgentStateUseCase`).
   - **Não é autorização.** É um gate de UX para a LLM, não controle de acesso — a autenticação de verdade é a do Keycloak (ver seção *Segurança*), que continua valendo por baixo: quem chama a API em 8081 direto ainda precisa de um token com a role certa, e um usuário com `write` que confirmasse fora da tela também passaria. O que isto impede é a LLM gravando por conta própria a partir de uma frase ambígua, não uma pessoa autorizada.
   - Fora de requisição HTTP não há holder e a escrita executa direto (log em WARN). Isso vale para contexto sem servlet; o eval **tem** `MockHttpServletRequest`, então lá a escrita também vira pendência — por isso o recorder do eval passou a ser `ObservationHandler` (`EvalTestConfig`) em vez de decorator de `ToolCallbackProvider`: por dentro da confirmação, um decorator nunca seria chamado e o eval veria "nenhuma tool chamada".
 - **Leitura é só `executeQuery`.** Das 12 tools, uma lê (`executeQuery`), uma descreve o schema (`describeSchema`) e dez escrevem (create/update/link/assign/**delete**). Não existem tools tipadas de busca ou contagem: elas foram removidas porque `executeQuery` já respondia tudo que elas respondiam, e a sobreposição fazia o modelo escolher errado — um terço do `tool-selection.json` existia só para policiar essa escolha. E porque elas *não* alcançavam perguntas compostas: "o motorista com mais falhas por estado" é argmax por grupo, que nenhuma delas expressa e que o modelo, sem caminho de tool, respondia inventando dados. Autorização por linha (usuário que vê um estado e não outro) fica com RLS no Postgres, não com filtro em parâmetro de tool.
-- **Exclusão existe só para motorista e veículo** (`deleteDriver`, `deleteVehicle`), sempre por id — o modelo consulta com `executeQuery` e usa o id retornado; a descrição da tool proíbe UUID inventado. Pedido e rota continuam sem exclusão, e `executeQuery` só aceita SELECT: aí o system prompt segue mandando dizer que não é suportado, porque sem a instrução o modelo inventava motivo ("veículo vinculado a motoristas") para uma operação que não existe. Regras que moram no service, não no prompt: motorista **com rotas** é recusado com `ConflictException` (a FK `route→driver` é `ON DELETE RESTRICT`, e deixar o banco estourar devolveria erro de constraint no lugar de explicação), e o `DeletionSummary` conta os vínculos `driver_vehicle` que caíram por `CASCADE` — exclusão que apaga três vínculos em silêncio é o efeito colateral que o usuário precisa ver. Human in the loop vem de graça: o `ConfirmingToolCallbackProvider` classifica por exclusão, então `delete*` nasceu confirmada sem tocar no agent; o `PendingActionMapper` só marca `destructive` (derivado do prefixo `delete`) para o webui pintar o card e o botão de vermelho e escrever "Excluir". E o card de exclusão mostra o **registro**, não o UUID: o `DeletionTargetLookup` roda um SELECT fixo pela própria tool `executeQuery` (chamada pelo agent, sem LLM no meio) e guarda os campos no `PendingAction.details`. Confirmar um UUID não é conferir nada — ainda mais com `driver.name` não sendo único, onde o modelo pode ter escolhido o homônimo errado. Id que não existe (UUID inventado, registro já removido) é **recusado antes do card**, com instrução de consultar primeiro: a alternativa era o usuário clicar em confirmar e só então receber "não encontrado".
+- **Exclusão existe só para motorista e veículo** (`deleteDriver`, `deleteVehicle`), sempre por id — o modelo consulta com `executeQuery` e usa o id retornado; a descrição da tool proíbe UUID inventado. Pedido e rota continuam sem exclusão, e `executeQuery` só aceita SELECT: aí o system prompt segue mandando dizer que não é suportado, porque sem a instrução o modelo inventava motivo ("veículo vinculado a motoristas") para uma operação que não existe. Regras que moram no service, não no prompt: motorista **com rotas** é recusado com `ConflictException` (a FK `route→driver` é `ON DELETE RESTRICT`, e deixar o banco estourar devolveria erro de constraint no lugar de explicação), e o `DeletionSummary` conta os vínculos `driver_vehicle` que caíram por `CASCADE` — exclusão que apaga três vínculos em silêncio é o efeito colateral que o usuário precisa ver. Human in the loop vem de graça: o `WriteConfirmationGuardrail.isWrite` classifica por exclusão, então `delete*` nasceu confirmada sem tocar no agent; o `ActionLabels` só marca `destructive` (derivado do prefixo `delete`) para o webui pintar o card e o botão de vermelho e escrever "Excluir". E o card de exclusão mostra o **registro**, não o UUID: o `DeletionTargetLookup` roda um SELECT fixo pela própria tool `executeQuery` (chamada pelo agent, sem LLM no meio) e guarda os campos no `PendingAction.details`. Confirmar um UUID não é conferir nada — ainda mais com `driver.name` não sendo único, onde o modelo pode ter escolhido o homônimo errado. Id que não existe (UUID inventado, registro já removido) é **recusado antes do card**, com instrução de consultar primeiro: a alternativa era o usuário clicar em confirmar e só então receber "não encontrado".
 - Eval (`./mvnw test -Peval` no agent, exige API, LLM, Keycloak e Postgres no ar — `EvalEnvironmentCondition` checa os quatro antes de subir o contexto, com mensagem apontando qual está fora): o dataset inteiro custa caro — cada caso é ao menos uma ida à LLM, em série, e os com `setup` são duas. Ao mexer numa regra, rode o recorte: `-Deval.cases=driver-followup-filters-by-id,driver-failures-ignore-route-status`. O piso (`-Deval.threshold`) passa a valer sobre o subconjunto, então recorte é para iterar, não para aprovar mudança.
 - Antes de escrever regra nova no system prompt, pergunte se o código pode garantir aquilo. Limite de payload é teto no `QueryService`, não pedido ao modelo; argumento de render inválido é validação na tool, não instrução. O prompt fica com o que só ele carrega: fatos do domínio (tradução de status, ausência de exclusão, leitura só por `executeQuery`) e comportamento que nenhum código alcança (não confirmar ação sem retorno de tool). E o que ficar precisa de caso no `tool-selection.json` — regra de prompt sem eval é regra que ninguém percebe quando para de valer, ainda mais depois de trocar de modelo.
-- Sessão: o `main.js` gera um `sessionId` **novo a cada carregamento da página**. As mensagens vivem só no DOM e somem no F5, enquanto a `ChatMemory` do agent não some — reaproveitar o id fazia o modelo responder sobre uma conversa que já não estava na tela. Desde a fase 5 a chave real da conversa não é o `sessionId` sozinho: é `AuthenticatedUser.conversationId(sessionId)`, que combina o `sub` do JWT autenticado com o `sessionId` recebido. Com autenticação, o `sessionId` deixou de ser exclusivo de quem o gerou — o webui não muda de sessionStorage por usuário, e nada impede alguém de forçar o mesmo valor de outra sessão —, então mandar o `sessionId` de outra pessoa não pode mais ler a conversa dela nem resgatar a pendência dela (`IPendingActionStore`, `IConversationStateStore`). Sem `sub` (fora de requisição HTTP autenticada), a chave cai para o `sessionId` cru — hoje só acontece antes do eval se autenticar, ou em teste que não monta `SecurityContext`. Se um dia o histórico for persistido no `localStorage`, o `sessionId` volta a ser reaproveitável entre cargas de página, mas o isolamento por usuário continua valendo do mesmo jeito.
-- `IRenderableContent` é sealed + `@JsonTypeInfo(property = "type")`; o webui despacha por `renderData.type` (`chart`/`table`). Tipo novo = novo record permitido + `@JsonSubTypes` + branch no `main.js`.
+- Sessão: o `main.js` gera um `sessionId` **novo a cada carregamento da página**. As mensagens vivem só no DOM e somem no F5, enquanto a `ChatMemory` do agent não some — reaproveitar o id fazia o modelo responder sobre uma conversa que já não estava na tela. Desde a fase 5 a chave real da conversa não é o `sessionId` sozinho: é `AuthenticatedUser.conversationId(sessionId)`, que combina o `sub` do JWT autenticado com o `sessionId` recebido — calculada no `ChatController`, que passa aos use cases já o `conversationId` (o core não lê o `SecurityContext`; o eval chama o mesmo método antes de `respond`). Com autenticação, o `sessionId` deixou de ser exclusivo de quem o gerou — o `sessionId` fica no `localStorage`, que não é separado por usuário, e nada impede alguém de forçar o mesmo valor de outra sessão —, então mandar o `sessionId` de outra pessoa não pode mais ler a conversa dela nem resgatar a pendência dela (`PendingActionGateway`, `ConversationStateGateway`). Sem `sub` (fora de requisição HTTP autenticada), a chave cai para o `sessionId` cru — hoje só acontece antes do eval se autenticar, ou em teste que não monta `SecurityContext`. Se um dia o histórico for persistido no `localStorage`, o `sessionId` volta a ser reaproveitável entre cargas de página, mas o isolamento por usuário continua valendo do mesmo jeito.
+- `RenderableContent` é sealed + `@JsonTypeInfo(property = "type")`; o webui despacha por `renderData.type` (`chart`/`table`). Tipo novo = novo record permitido + `@JsonSubTypes` + branch no `main.js`.
 - Observabilidade (`LangfuseObservabilityConfig`): opcional, atrás da flag `langfuse.enabled`
   (`LANGFUSE_CLIENT_ENABLED`, **default `false`**) — ela liga o `management.tracing.enabled` e é a condição
   da própria `@Configuration`. Independente do `LANGFUSE_SERVER_ENABLED`, que só controla se o
@@ -116,14 +234,14 @@ Camadas: `controller/` (REST) e `mcp/` (tools) são **dois adaptadores sobre o m
   aplicação — não alimentam o Langfuse. O `ObservationPredicate` corta health checks por **dois**
   caminhos, e ambos importam: a requisição HTTP que chega (`/actuator/**` e `/api/chat/health`, senão o
   polling do `start.sh` e do webui gera um trace por segundo) e o `@Scheduled` do
-  `BackendHealthIndicator`, que o Spring observa sozinho como `tasks.scheduled.execution` e rendia um
+  `BackendHealthGatewayImpl`, que o Spring observa sozinho como `tasks.scheduled.execution` e rendia um
   trace de 5ms a cada 15s. `LangfuseObservabilityConfigTest` cobre os dois. Com a flag desligada não há Tracer no contexto — nada aqui
-  carrega, e o `ChatService` (que taga a span com `sessionId` e input/output do trace) vira no-op.
+  carrega, e o `SendMessageUseCase` (que taga a span com `sessionId` e input/output do trace) vira no-op.
 - Ordem de subida importa: o agent faz handshake MCP no startup. Se a API não estiver respondendo `/actuator/health` antes, ele sobe sem as tools e o chat responde "erro ao processar" (`McpServerUnavailableFailureAnalyzer` registra a falha via `META-INF/spring.factories`).
 
 ### logistic-webui
 
-`src/main.js` (~320 linhas, sem framework): mantém `sessionId` no `localStorage`, faz `POST` para `VITE_API_URL` (`.env`, default `http://localhost:8080/api/chat`), renderiza markdown com `marked` e despacha `renderData` para `buildChart` (Chart.js) ou `buildTable`. `pendingAction` na resposta vira o card de confirmação (`buildPendingAction`): os botões desabilitam **antes** do `await` — o `IPendingActionStore` do agent consome a pendência uma vez só, e o segundo clique voltaria como "ação não encontrada".
+`src/main.js` (~570 linhas, sem framework): gera um `sessionId` novo a cada carga da página (gravado no `localStorage`, mas nunca reaproveitado), faz `POST` para `VITE_API_URL` (`.env` da raiz, sem default — sem ela o bundle falha ao carregar), renderiza markdown com `marked` e despacha `renderData` para `buildChart` (Chart.js) ou `buildTable`. `pendingAction` na resposta vira o card de confirmação (`buildPendingAction`): os botões desabilitam **antes** do `await` — o `PendingActionGateway` do agent consome a pendência uma vez só, e o segundo clique voltaria como "ação não encontrada".
 
 ## Convenções
 
@@ -149,7 +267,7 @@ não é mais alcançável sem ele.
 **Fluxo de tokens:**
 
 ```
-                    Keycloak (:8090, realm logistic)
+                    Keycloak (:8091, realm logistic)
                           ^        ^
        Authorization Code |        | Token Exchange (RFC 8693)
              + PKCE       |        |
@@ -162,7 +280,7 @@ não é mais alcançável sem ele.
                                                REST + /mcp
 ```
 
-`logistic-webui` é SPA pública com PKCE (`src/auth.js`, ~300 linhas, sem lib — decisão de escopo, a
+`logistic-webui` é SPA pública com PKCE (`src/auth.js`, ~260 linhas, sem lib — decisão de escopo, a
 alternativa aceitável se isso ficar caro é `oidc-client-ts`). `logistic-agent` é confidencial: resource
 server do token do browser **e** cliente OAuth que troca esse token por um com `aud=logistic-api`
 (`TokenExchangeService`, RFC 8693) antes de chamar o `/mcp` da API. `logistic-api` é resource server
@@ -219,10 +337,11 @@ puro, sem login nenhum.
   `@ConditionalOnMissingBean` padrão) procura esse marcador e só ali deixa a `ToolExecutionException`
   propagar — todo o resto cai no comportamento padrão do Spring AI (erro vira texto de volta ao
   modelo). Isso importa por um motivo específico deste repositório: só retorno de sucesso encerra o
-  loop de tool calls (ver a armadilha das 172 recusas idênticas de render, mais abaixo na seção do
+  loop de tool calls (ver a armadilha das 172 recusas idênticas de render, mais acima na seção do
   agent) — se a recusa de permissão caísse no caminho padrão (texto ao modelo), o modelo determinístico
-  reenviaria a mesma chamada negada para sempre. `ChatService.respond` captura essa exceção específica
-  e devolve "Você não tem permissão para executar essa operação.", em vez de deixá-la virar um 500. As
+  reenviaria a mesma chamada negada para sempre. O `ChatModelGatewayImpl` (dono do marcador,
+  `PERMISSION_DENIED_MARKER`) traduz essa `ToolExecutionException` em `PermissionDeniedException` do
+  core, e `SendMessageUseCase.respond` a captura e devolve "Você não tem permissão para executar essa operação.", em vez de deixá-la virar um 500. As
   requisições REST de verdade (`POST /api/chat/confirm` no agent, `/api/**` na API) **não** têm esse
   problema — são endpoints HTTP normais atrás do `SecurityFilterChain`, e `user2` sem `write` recebe um
   403 real ali, sem marcador nenhum envolvido.
@@ -252,12 +371,12 @@ puro, sem login nenhum.
 - **Filtro de tools por role no agent (fase 5) é UX, não autorização** — reduz a superfície de prompt
   injection e evita o passeio de três telas (consultar → confirmar → 403 no clique) que `user2` fazia
   antes para descobrir que não podia excluir nada, mas **não substitui** a checagem real, que é
-  `McpAuthorization` na API. Ver o javadoc de `ConfirmingToolCallbackProvider.allowed` — não remova a
+  `McpAuthorization` na API. Ver `ConfirmingToolCallbackProvider.allowed` — não remova a
   checagem da API achando que o filtro do agent basta; o filtro só esconde a tool de um modelo
   bem-comportado, e nada impede uma chamada direta ao `/mcp` sem passar pelo agent.
 
 - **Eval usa usuário de máquina, sem perfil que desligue a segurança.** O `ToolSelectionEvalTest`
-  injeta `ChatService` e chama direto — não passa pelo `SecurityFilterChain` do agent —, mas a chamada
+  injeta `SendMessageUseCase` e chama direto — não passa pelo `SecurityFilterChain` do agent —, mas a chamada
   ao `/mcp` continua real desde a fase 4. `EvalAuthentication` (`logistic-agent/src/test`) obtém um
   token via *direct grant* no client `logistic-eval` (único com essa concessão habilitada, só para
   isto) para o usuário `eval-user`, e instala um `JwtAuthenticationToken` no
@@ -304,7 +423,7 @@ e dar F5 basta — só realm importado exige recriar container, tema não.
   `menu-button-links`, o handler de `data-once-link`) são funcionais e foram mantidos: tirá-los
   quebra o login em outra aba e o dropdown de idioma.
 - **Os tokens de cor são cópia de `logistic-webui/src/style.css`**, não import: são origens
-  diferentes (8090 x 5173) e o Keycloak só serve o que está dentro do tema. Mexeu na paleta do
+  diferentes (8091 x 5173) e o Keycloak só serve o que está dentro do tema. Mexeu na paleta do
   webui? Mexa aqui junto, senão o login descola do resto.
 - **Botão claro/escuro:** mesmo mecanismo do webui — `data-theme` no `<html>`, chave `lp-theme`
   no `localStorage`, e um snippet inline no `<head>` que resolve o tema **antes da primeira

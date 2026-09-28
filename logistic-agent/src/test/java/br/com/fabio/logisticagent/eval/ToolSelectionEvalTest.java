@@ -1,10 +1,11 @@
 package br.com.fabio.logisticagent.eval;
 
-import br.com.fabio.logisticagent.dto.ChatMessageDTO;
-import br.com.fabio.logisticagent.dto.render.ChartContent;
-import br.com.fabio.logisticagent.dto.render.IRenderableContent;
-import br.com.fabio.logisticagent.dto.render.TableContent;
-import br.com.fabio.logisticagent.service.ChatService;
+import br.com.fabio.logisticagent.core.domain.chat.ChatMessage;
+import br.com.fabio.logisticagent.core.domain.render.ChartContent;
+import br.com.fabio.logisticagent.core.domain.render.RenderableContent;
+import br.com.fabio.logisticagent.core.domain.render.TableContent;
+import br.com.fabio.logisticagent.core.usecase.chat.SendMessageUseCase;
+import br.com.fabio.logisticagent.security.AuthenticatedUser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -47,7 +48,7 @@ class ToolSelectionEvalTest {
     private static final double DEFAULT_THRESHOLD = 0.75;
 
     @Autowired
-    private ChatService chatService;
+    private SendMessageUseCase sendMessageUseCase;
 
     @Autowired
     private ToolCallRecorder recorder;
@@ -100,11 +101,11 @@ class ToolSelectionEvalTest {
 
         try {
             if (evalCase.setup() != null) {
-                chatService.respond(evalCase.setup(), sessionId);
+                sendMessageUseCase.respond(evalCase.setup(), AuthenticatedUser.conversationId(sessionId));
                 recorder.reset();
             }
 
-            ChatMessageDTO response = chatService.respond(evalCase.question(), sessionId);
+            ChatMessage response = sendMessageUseCase.respond(evalCase.question(), AuthenticatedUser.conversationId(sessionId));
             return evaluate(evalCase, response);
         } catch (Exception e) {
             return new Result(evalCase, recorder.calls(), "none", "erro: " + e.getMessage(), false);
@@ -113,7 +114,7 @@ class ToolSelectionEvalTest {
         }
     }
 
-    private Result evaluate(EvalCase evalCase, ChatMessageDTO response) {
+    private Result evaluate(EvalCase evalCase, ChatMessage response) {
         List<ToolCall> calls = recorder.calls();
         List<String> names = recorder.names();
         List<String> failures = new ArrayList<>();
@@ -173,7 +174,7 @@ class ToolSelectionEvalTest {
                 .filter(fragment -> text.contains(fragment.toLowerCase(Locale.ROOT)))
                 .forEach(fragment -> failures.add("resposta com '" + fragment + "', que não podia aparecer"));
 
-        String actualPending = response.pendingAction() == null ? "none" : response.pendingAction().tool();
+        String actualPending = response.pendingAction() == null ? "none" : response.pendingAction().toolName();
         if (evalCase.pendingAction() != null && !evalCase.pendingAction().equals(actualPending)) {
             failures.add("ação pendente esperada '" + evalCase.pendingAction() + "', obtida '" + actualPending + "'");
         }
@@ -185,7 +186,7 @@ class ToolSelectionEvalTest {
         return value == null ? "" : value;
     }
 
-    private String serialize(IRenderableContent renderData) {
+    private String serialize(RenderableContent renderData) {
         if (renderData == null) {
             return "";
         }
@@ -207,7 +208,7 @@ class ToolSelectionEvalTest {
         return fragment.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
     }
 
-    private static String renderTypeOf(IRenderableContent renderData) {
+    private static String renderTypeOf(RenderableContent renderData) {
         return switch (renderData) {
             case ChartContent ignored -> "chart";
             case TableContent ignored -> "table";

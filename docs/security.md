@@ -23,7 +23,7 @@ sequenceDiagram
     autonumber
     actor U as Usuário
     participant W as logistic-webui<br/>SPA :5173
-    participant K as Keycloak<br/>realm logistic :8090
+    participant K as Keycloak<br/>realm logistic :8091
     participant A as logistic-agent :8080
     participant L as LLM<br/>OpenAI-compat
     participant P as logistic-api :8081<br/>MCP server
@@ -128,13 +128,13 @@ O que o código garante, e não o prompt:
 
 | Guardrail | Onde | Por quê |
 |-----------|------|---------|
-| **Classificação por exclusão** | `ConfirmingToolCallbackProvider` | Leitura é `executeQuery` e `describeSchema`; todo o resto é escrita. Tool nova nasce protegida — a lista que envelhece sozinha é a de escrita, não a de leitura. |
+| **Classificação por exclusão** | `WriteConfirmationGuardrail` | Leitura é `executeQuery` e `describeSchema`; todo o resto é escrita. Tool nova nasce protegida — a lista que envelhece sozinha é a de escrita, não a de leitura. |
 | **Campo obrigatório faltando vira pergunta** | `RequiredArgumentsCheck` | A lista de obrigatórios sai do `required` do próprio schema da tool. `N/A`, `-` e `null` contam como ausência, senão viram texto literal no banco. |
 | **Exclusão mostra o registro, não o UUID** | `DeletionTargetLookup` | O agent roda um `SELECT` fixo pela própria tool `executeQuery` (sem LLM no meio) e mostra nome, e-mail, cidade e estado do motorista — ou nome e capacidade do veículo. Confirmar um UUID não é conferir nada — ainda mais com nome de motorista não sendo único. Id inexistente é recusado **antes** do card. |
-| **"Nada foi gravado ainda" é incondicional** | `ChatService` | O modelo escreve "cadastrado com sucesso" diante de qualquer retorno positivo. Caçar essa frase seria heurística perdida; o aviso é sempre verdadeiro enquanto a pendência existe. |
-| **Anúncio sem tool dispara retry** | `ChatService.ACTION_CLAIM` | Já aconteceu de o modelo responder "aguardando sua confirmação" — ou "cadastrado com sucesso" — sem ter chamado tool nenhuma: tela com a frase e sem botão. Duas tentativas corretivas e, no fim, a tela desmente. |
-| **Escrita pedida que não virou pendência** | `ChatService.WRITE_REQUEST` | O desmentido acima depende de reconhecer a frase do modelo, e ele tem infinitas. Este não: se o usuário pediu para gravar (inclusive o "sim" que aceita o pedido anterior) e o turno terminou sem pendência, a tela diz que nada foi gravado — dê o modelo a resposta que der. Pergunta de volta e recusa explícita ficam de fora, senão o aviso vira ruído. |
-| **Uma escrita por resposta, consumo único** | `PendingActionHolder`, `PendingActionStore` | A pendência é resgatada uma vez só: dois cliques seriam duas gravações, e nenhuma escrita da API é idempotente. TTL de 15 min para o que o usuário abandonou. E a pendência é indexada pelo usuário: o `actionId` de um não é resgatável por outro. |
+| **"Nada foi gravado ainda" é incondicional** | `SendMessageUseCase` | O modelo escreve "cadastrado com sucesso" diante de qualquer retorno positivo. Caçar essa frase seria heurística perdida; o aviso é sempre verdadeiro enquanto a pendência existe. |
+| **Anúncio sem tool dispara retry** | `UnbackedClaimGuardrail.claimsAction` | Já aconteceu de o modelo responder "aguardando sua confirmação" — ou "cadastrado com sucesso" — sem ter chamado tool nenhuma: tela com a frase e sem botão. Duas tentativas corretivas e, no fim, a tela desmente. |
+| **Escrita pedida que não virou pendência** | `UnbackedClaimGuardrail.isWriteRequest` | O desmentido acima depende de reconhecer a frase do modelo, e ele tem infinitas. Este não: se o usuário pediu para gravar (inclusive o "sim" que aceita o pedido anterior) e o turno terminou sem pendência, a tela diz que nada foi gravado — dê o modelo a resposta que der. Pergunta de volta e recusa explícita ficam de fora, senão o aviso vira ruído. |
+| **Uma escrita por resposta, consumo único** | `PendingActionHolder`, `PendingActionGateway` | A pendência é resgatada uma vez só: dois cliques seriam duas gravações, e nenhuma escrita da API é idempotente. TTL de 15 min para o que o usuário abandonou. E a pendência é indexada pelo usuário: o `actionId` de um não é resgatável por outro. |
 | **Repetir a mesma chamada devolve a mesma pendência** | `ConfirmingToolCallback` | Com temperatura baixa o modelo reenvia a chamada idêntica; recusa que só repete a crítica **não** encerra o loop de tool calls. Retorno idempotente encerra. |
 
 O card de exclusão é vermelho, o botão diz **Excluir**, e a `logistic-api` recusa apagar um

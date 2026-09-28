@@ -3,10 +3,70 @@
 Conversa com a LLM local, descobre as tools MCP do `logistic-api` e devolve para o webui
 texto em markdown, opcionalmente acompanhado de um gráfico ou tabela.
 
-**Não tem datasource.** Nenhuma dependência de banco no `pom.xml` — todo acesso a dados passa
-pelas tools MCP da `logistic-api`.
+**Não toca o banco de domínio.** Todo dado de motorista, veículo, pedido e rota passa pelas tools
+MCP da `logistic-api`. O datasource do agent aponta para o `agentdb` (Postgres próprio, 5433) e
+guarda só estado de conversa: histórico de chat, ação pendente de confirmação e intenção de escrita.
 
 Visão geral e como subir tudo junto: [README da raiz](../README.md).
+
+## Convenções de pacote
+
+Clean Architecture pragmática — regras completas no [CLAUDE.md da raiz](../CLAUDE.md#convenções-de-pacote-clean-architecture).
+Resumo:
+
+| Raiz | Contém |
+|------|--------|
+| `core/` | `domain/` (só modelo), `usecase/<domínio>/` (um `@Service` por caso de uso), `gateway/` (interfaces para o externo), `service/` (etapa compartilhada), `settings/`, `support/`, e pastas de conceito (`agent/`, `agent/tools/`, `guardrail/`) |
+| `infra/` | `gateway/` (`*GatewayImpl`), `repository/` (Spring Data), `entity/` (`*Entity`), `dto/`, `mapper/`, `support/`, `client/` |
+| `entrypoint/` | `controller/`, `exception/`, `request/`, `response/`, `mapper/`, e outros entrypoints lado a lado |
+| `config/` | todo `@Configuration` e propriedades tipadas |
+| `security/` | módulo transversal (autenticação e token exchange) — **exceção documentada**; o `core` não o importa |
+
+- `core` não importa `infra`, `entrypoint`, `config` nem os módulos de feature; SDK de LLM, JPA e
+  cliente HTTP ficam no `infra`.
+- controller → use case → gateway. Use case não chama use case; tool do laço do agente fica no core e
+  chama gateway.
+- Sufixos, nunca prefixo `I*`. Interface só para gateway, repository Spring Data e tipo de modelo com
+  motivo (sealed, callback).
+- Testes espelham o pacote do que testam.
+
+Árvore atual (`br.com.fabio.logisticagent`), no mesmo formato do `resume-ai`:
+
+```
+config/                 @Configuration: ChatClient, segurança, CORS, Langfuse, MCP, log de tool calls, purga
+core/
+  agent/                holders request-scoped do laço (render, tool calls, resultado de query,
+                        pendência) e ActionLabels (textos PT das tools de escrita)
+  agent/tools/          RenderTool
+  domain/chat/          ChatMessage, PendingAction
+  domain/render/        RenderableContent, ChartContent, TableContent, Dataset
+  domain/exception/     PermissionDeniedException
+  gateway/              ChatModel, ChatHistory, McpTool, PendingAction, ConversationState,
+                        Tracing, BackendHealth (sufixo Gateway)
+  guardrail/            WriteConfirmationGuardrail, RequiredArgumentsCheck, DeletionTargetLookup,
+                        UnbackedClaimGuardrail, AnswerNotices
+  settings/             StatePurgeSettings
+  usecase/chat/         SendMessageUseCase, ConfirmActionUseCase
+  usecase/health/       CheckHealthUseCase
+  usecase/maintenance/  PurgeAgentStateUseCase
+infra/
+  client/               ConfirmingToolCallbackProvider
+  entity/               ConversationStateEntity, PendingActionEntity
+  gateway/              *GatewayImpl, uma por interface do core
+  mapper/               PendingActionEntityMapper
+  repository/           ConversationStateRepository, PendingActionRepository
+  support/              DetailsJsonConverter
+entrypoint/
+  controller/           ChatController
+  mapper/               ResponseMapper
+  request/              ChatRequest, ConfirmRequest
+  response/             ChatResponse, PendingActionResponse, HealthResponse
+  scheduler/            AgentStatePurgeScheduler
+security/               AuthenticatedUser, TokenExchangeService
+```
+
+Exceções à regra (anotações de framework no core, `RenderableContent` reaproveitado na resposta,
+decorator do MCP em `infra/client`, holders request-scoped entre `infra` e `core`) estão justificadas no [CLAUDE.md](../CLAUDE.md#convenções-de-pacote-clean-architecture).
 
 ## Rodar isolado
 
@@ -35,17 +95,18 @@ Healthcheck: `GET http://localhost:8080/api/chat/health`.
 Qualquer servidor com API compatível com OpenAI serve — troque `base-url` e `model`.
 
 Os timeouts do cliente HTTP não vêm do YAML: estão no bean `llmTimeoutCustomizer`
-(`ChatClientConfig`), 10s para conectar e 120s para ler. Um modelo local com contexto grande
-passa fácil dos 30s default.
+(`ChatClientConfig`), 10s para conectar e 300s para ler. A chamada não é streaming: o read timeout cobre a geração
+inteira. O webui aborta em 310s — mudou um, mude o outro.
 
 ## Memória de conversa
 
-`MessageWindowChatMemory` em memória, janela de 20 mensagens, particionada pelo `sessionId` que
-vem no request. Reiniciar o agent zera todas as conversas — é demo, não tem persistência.
+`MessageWindowChatMemory` sobre `JdbcChatMemoryRepository` (tabela `spring_ai_chat_memory` no
+`agentdb`), janela de 20 mensagens, particionada por `sub|sessionId` (`AuthenticatedUser.conversationId`).
+Sobrevive a restart; o `PurgeAgentStateUseCase` apaga conversa parada há 24h.
 
 ## System prompt
 
-Constante `SYSTEM_PROMPT` em `ChatClientConfig`. Ele carrega as decisões que o modelo não teria
+Arquivo `src/main/resources/prompts/system_prompt.md`, carregado pelo `ChatModelGatewayImpl`. Ele carrega as decisões que o modelo não teria
 como adivinhar:
 
 - **Idioma e tom** — português do Brasil, conciso.
@@ -85,21 +146,16 @@ elas chegam do servidor no startup.
 As duas tools vivem aqui, não na API: são contrato de UI, não de domínio.
 
 1. O modelo chama `renderChart` ou `renderTable` como qualquer outra tool.
-2. `RenderTool` valida (`chartType` tem que ser `bar`, `line`, `pie` ou `doughnut`) e monta um
-   `ChartContent` ou `TableContent`.
+2. O modelo não manda os dados: informa quais colunas do resultado da última `executeQuery` usar.
+   `RenderTool` lê as linhas do `QueryResultHolder`, valida (`chartType` tem que ser `bar`, `line`,
+   `pie` ou `doughnut`, colunas têm que existir) e monta um `ChartContent` ou `TableContent`.
 3. O objeto é guardado no `RenderHolder`, um bean **request-scoped** — cada requisição HTTP tem
    o seu, então duas conversas simultâneas não misturam render.
-4. Terminada a chamada do `ChatClient`, `ChatService` lê o holder e devolve
-   `new ChatMessageDTO("assistant", content, renderData)`.
+4. Terminada a chamada à LLM (`ChatModelGateway`), o `SendMessageUseCase` lê o holder e devolve
+   um `ChatMessage("assistant", content, renderData, pendingAction)`, que o `ChatController` converte
+   em `ChatResponse` pelo `ResponseMapper`.
 5. Se o modelo não chamou nenhuma das duas, o holder está vazio e `renderData` sai `null` —
    o webui renderiza só o markdown.
-
-### Por que `rows` é `List<List<String>>`
-
-O tipo Java do parâmetro da tool é o que vira JSON Schema. `List<List<Object>>` gera
-`"items": { }` — schema vazio, sem restrição nenhuma; sem isso o modelo improvisa a estrutura da
-célula (já mandou `{"text": "SP"}` no lugar de `"SP"`). Com `List<List<String>>` o schema exige
-string e o modelo acerta. O webui renderiza com `textContent`, então o valor exibido é idêntico.
 
 ## Contrato com o webui
 
@@ -112,7 +168,15 @@ Request — `POST /api/chat`:
 Response:
 
 ```json
-{ "role": "assistant", "content": "texto em markdown", "renderData": null }
+{ "role": "assistant", "content": "texto em markdown", "renderData": null, "pendingAction": null }
+```
+
+`pendingAction` vem preenchido quando o modelo pediu uma escrita — o webui desenha o card e
+confirma por `POST /api/chat/confirm` com `{ "sessionId", "actionId", "approved" }`:
+
+```json
+{ "id": "…", "tool": "createDriver", "summary": "Cadastrar um novo motorista",
+  "arguments": { "Nome": "João" }, "destructive": false }
 ```
 
 `renderData` é `null`, ou um destes:

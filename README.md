@@ -112,7 +112,7 @@ Java moderno:
 
 ```
                                    ┌──────────────────────────────┐
-                                   │  Keycloak :8090              │
+                                   │  Keycloak :8091              │
              Authorization Code    │  realm logistic              │
              + PKCE          ┌────►│  roles: chat, read, write    │
                              │     └──────────────────────────────┘
@@ -162,7 +162,7 @@ PostgreSQL 18 :5433             ← docker compose (raiz) + Flyway   (estado do 
 | [`logistic-webui/`](logistic-webui/README.md) | Vite 8, Chart.js 4, marked (JS puro) | 5173 | Chat no browser; login com PKCE, renderiza markdown, tabela e gráfico |
 | [`logistic-agent/`](logistic-agent/README.md) | Java 21, Spring Boot 4, Spring AI (MCP client), JPA, Flyway | 8080 | Conversa com a LLM, descobre as tools MCP, troca o token, monta o `renderData`; persiste seu próprio estado (chat memory, pendência de confirmação) no banco `agentdb` |
 | [`logistic-api/`](logistic-api/README.md) | Java 21, Spring Boot 4, JPA, Flyway, MCP server | 8081 | Dono do domínio e do banco; expõe REST + tools MCP com autorização por role |
-| Keycloak (`quay.io/keycloak/keycloak:26.7`) | Realm `logistic`, importado no primeiro boot | 8090 | Emite e valida os tokens das três apps; tela de login com o tema da aplicação |
+| Keycloak (`quay.io/keycloak/keycloak:26.7`) | Realm `logistic`, importado no primeiro boot | 8091 | Emite e valida os tokens das três apps; tela de login com o tema da aplicação |
 
 ## Subindo a stack
 
@@ -196,7 +196,7 @@ nos containers — para o container, preserva o volume do banco.
 
 ### O que ele faz, em ordem — e por que a ordem importa
 
-1. **Checa pré-requisitos e portas.** Java, Node, Docker, e as portas 5432, 5433, 8090, 8081, 8080, 5173.
+1. **Checa pré-requisitos e portas.** Java, Node, Docker, e as portas 5432, 5433, 8091, 8081, 8080, 5173.
    Container da stack já de pé é reaproveitado, não é motivo de erro.
 2. **Sobe o Postgres e o Keycloak** (`docker compose up -d`) e espera os dois ficarem prontos — o
    Keycloak pelo `/health/ready` na porta de management (9000). No **primeiro** boot ele importa o
@@ -219,7 +219,7 @@ produz uma falha que só aparece na primeira pergunta do usuário.
 | <http://localhost:8080> | logistic-agent |
 | <http://localhost:8081> | logistic-api |
 | <http://localhost:8081/swagger-ui.html> | Swagger da API |
-| <http://localhost:8090> | Keycloak (console admin: `admin`/`admin`) |
+| <http://localhost:8091> | Keycloak (console admin: `admin`/`admin`) |
 
 ### Login e usuários
 

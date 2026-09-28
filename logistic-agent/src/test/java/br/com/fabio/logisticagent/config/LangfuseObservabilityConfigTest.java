@@ -1,5 +1,6 @@
 package br.com.fabio.logisticagent.config;
 
+import br.com.fabio.logisticagent.infra.gateway.BackendHealthGatewayImpl;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationPredicate;
 import jakarta.servlet.http.HttpServletRequest;
@@ -30,9 +31,9 @@ class LangfuseObservabilityConfigTest {
 
     @Test
     void scheduledTasksAreNotObserved() throws NoSuchMethodException {
-        Method check = BackendHealthIndicator.class.getDeclaredMethod("check");
+        Method check = BackendHealthGatewayImpl.class.getDeclaredMethod("check");
         ScheduledTaskObservationContext context =
-                new ScheduledTaskObservationContext(new BackendHealthIndicator(), check);
+                new ScheduledTaskObservationContext(new BackendHealthGatewayImpl("http://localhost:8081"), check);
 
         assertThat(predicate.test("tasks.scheduled.execution", context)).isFalse();
     }

@@ -41,7 +41,7 @@ services:
     restart: unless-stopped
     command: start-dev --import-realm
     ports:
-      - "8090:8080"
+      - "8091:8080"
       - "9000:9000"
     volumes:
       - ./infra/keycloak/import:/opt/keycloak/data/import:ro

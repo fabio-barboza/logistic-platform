@@ -13,7 +13,7 @@ public class EvalEnvironmentCondition implements ExecutionCondition {
 
     private static final String API_URL = System.getProperty("eval.api.url", "http://localhost:8081");
     private static final String LLM_URL = System.getProperty("eval.llm.url", "http://localhost:8200");
-    private static final String KEYCLOAK_URL = System.getProperty("eval.keycloak.url", "http://localhost:8090");
+    private static final String KEYCLOAK_URL = System.getProperty("eval.keycloak.url", "http://localhost:8091");
 
     private static final String POSTGRES_HOST_PORT = System.getProperty("eval.postgres.url", "localhost:5432");
 
@@ -51,7 +51,7 @@ public class EvalEnvironmentCondition implements ExecutionCondition {
 
                     Eval abortado: Postgres não respondeu em %s.
                     O contexto Spring completo do agent agora exige datasource (ChatMemory,
-                    IPendingActionStore e IConversationStateStore vivem no banco).
+                    PendingActionGateway e ConversationStateGateway vivem no banco).
                     Suba a stack com ./start.sh (ou aponte para outro com -Deval.postgres.url=<host:porta>).
                     """.formatted(POSTGRES_HOST_PORT));
         }

@@ -15,7 +15,7 @@ AGENT_PORT=8080
 WEBUI_PORT=5173
 DB_PORT=5432
 AGENT_DB_PORT=5433
-KEYCLOAK_PORT=8090
+KEYCLOAK_PORT=8091
 KEYCLOAK_MGMT_PORT=9000
 LLM_URL="http://localhost:8200"
 
@@ -73,7 +73,7 @@ URLs depois da subida:
   http://localhost:8080   logistic-agent
   http://localhost:8081   logistic-api
   http://localhost:8081/swagger-ui.html   Swagger
-  http://localhost:8090   Keycloak (admin/admin)
+  http://localhost:8091   Keycloak (admin/admin)
 EOF
 }
 
@@ -194,7 +194,7 @@ check_ports() {
     if [ "$busy" = true ]; then
         fail "libere as portas acima antes de subir. Um container de outra sessão pode estar segurando a 5432: 'docker rm -f $DB_CONTAINER'."
     fi
-    info "portas 8080, 8081, 5173, 8090 e 5433 livres"
+    info "portas 8080, 8081, 5173, 8091 e 5433 livres"
 }
 
 check_llm() {

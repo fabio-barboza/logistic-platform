@@ -29,7 +29,7 @@ $AgentPort       = 8080
 $WebuiPort       = 5173
 $DbPort          = 5432
 $AgentDbPort     = 5433
-$KeycloakPort    = 8090
+$KeycloakPort    = 8091
 $KeycloakMgmtPort = 9000   # porta de management do Keycloak, onde vive o /health
 $LlmUrl          = 'http://localhost:8200'
 
@@ -97,7 +97,7 @@ URLs depois da subida:
   http://localhost:8080   logistic-agent
   http://localhost:8081   logistic-api
   http://localhost:8081/swagger-ui.html   Swagger
-  http://localhost:8090   Keycloak (admin/admin)
+  http://localhost:8091   Keycloak (admin/admin)
 '@ | Write-Host
 }
 
@@ -181,7 +181,7 @@ function Test-KeycloakContainerRunning {
 function Test-Ports {
     $busy = @()
 
-    # A 5432 e a 8090 têm tratamento próprio: se quem está ouvindo é o nosso container (Postgres
+    # A 5432 e a 8091 têm tratamento próprio: se quem está ouvindo é o nosso container (Postgres
     # ou Keycloak, os dois serviços do docker-compose sem profile), o compose apenas o
     # reaproveita — não é conflito. Sem isso, rodar com a stack já parcialmente de pé (ex.:
     # Keycloak que sobrou de uma sessão anterior) falhava achando porta ocupada por "outro
@@ -232,7 +232,7 @@ function Test-Ports {
     if ($busy.Count -gt 0) {
         Fail "libere as portas acima antes de subir. Um container de outra sessão pode estar segurando a 5432: 'docker rm -f $DbContainer'."
     }
-    Write-Info 'portas 8080, 8081, 5173 e 8090 livres'
+    Write-Info 'portas 8080, 8081, 5173 e 8091 livres'
 }
 
 function Test-Llm {
